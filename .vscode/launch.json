@@ -1,0 +1,60 @@
+{
+    // Requires the "CodeLLDB" extension (vadimcn.vscode-lldb).
+    //
+    // The dev config uses a preLaunchTask to stage runtime DLLs next to the
+    // exe (because `bevy/dynamic_linking` makes the exe depend on two DLLs
+    // that aren't on PATH when a debugger launches it directly). Release
+    // and unit-test configs don't enable dynamic_linking, so they can use
+    // CodeLLDB's `cargo` block directly. Full reasoning lives in
+    // `.github/copilot-instructions.md`.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug 'percussion' (dev)",
+            "type": "lldb",
+            "request": "launch",
+            "preLaunchTask": "dev: build & stage DLLs",
+            "program": "${workspaceFolder}/target/debug/percussion.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug 'percussion' (release)",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--package=percussion",
+                    "--bin=percussion",
+                    "--release"
+                ],
+                "filter": {
+                    "name": "percussion",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug unit tests in 'percussion'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=percussion"
+                ],
+                "filter": {
+                    "name": "percussion",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

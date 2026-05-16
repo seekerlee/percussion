@@ -1,0 +1,28 @@
+[package]
+name = "percussion"
+description = "Percussion — a Bevy game."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+# Expose the game as both a library (for tests / alt front-ends) and a binary.
+[lib]
+name = "percussion"
+path = "src/lib.rs"
+
+[[bin]]
+name = "percussion"
+path = "src/main.rs"
+
+[dependencies]
+bevy = { workspace = true }
+
+[features]
+default = []
+
+# Enable with `cargo run --features dev`.
+# Uses Bevy's dynamic linking for much faster iterative compile times during
+# development. Do NOT enable this for release builds.
+dev = ["bevy/dynamic_linking"]

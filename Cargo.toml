@@ -1,0 +1,54 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = ""
+authors = []
+
+[workspace.dependencies]
+bevy = "0.18.1"
+
+# ---------------------------------------------------------------------------
+# Profile tuning
+#
+# Bevy's debug builds are very slow with default settings. We turn on a tiny
+# amount of optimization in `dev` for our own code, and full optimization for
+# every dependency. Dependencies are only built once (and cached), so this
+# does not noticeably hurt iteration time.
+#
+# The biggest dev-loop killer is *linking*, not compiling. We reduce its cost
+# by emitting only the debug info we actually use and putting it next to the
+# binary instead of inside it.
+# ---------------------------------------------------------------------------
+
+[profile.dev]
+opt-level = 1
+# Keep enough debug info for useful stack traces and line numbers, but skip
+# full variable-level info — saves a lot of linker time on Bevy-sized graphs.
+debug = "line-tables-only"
+# Emit debug info as a separate side file (.pdb on Windows) instead of baking
+# it into the binary. Much faster incremental linking.
+split-debuginfo = "unpacked"
+
+[profile.dev.package."*"]
+opt-level = 3
+# Dependencies' debug info is rarely useful to us. Dropping it shaves seconds
+# off every link and reduces target/ size by a lot.
+debug = false
+
+# Release profile: optimize for runtime performance and small binary size.
+[profile.release]
+codegen-units = 1
+lto = "thin"
+
+# `cargo build --profile dist` produces a binary suitable for shipping.
+[profile.dist]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"

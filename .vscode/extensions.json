@@ -1,0 +1,11 @@
+{
+    // Open the Extensions view and run "Show Recommended Extensions" to install.
+    "recommendations": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb",
+        "ms-vscode.cpptools",
+        "fill-labs.dependi",
+        "usernamehw.errorlens"
+    ]
+}

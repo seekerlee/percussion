@@ -1,0 +1,165 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        // -------------------------------------------------------------------
+        // Build
+        // -------------------------------------------------------------------
+        {
+            "label": "cargo: build (dev, dynamic linking)",
+            "type": "cargo",
+            "command": "build",
+            "args": [
+                "--package",
+                "percussion",
+                "--features",
+                "dev"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "clear": true,
+                "reveal": "silent",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "cargo: build (release)",
+            "type": "cargo",
+            "command": "build",
+            "args": [
+                "--package",
+                "percussion",
+                "--release"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": "build",
+            "presentation": {
+                "clear": true,
+                "reveal": "silent",
+                "panel": "shared"
+            }
+        },
+        // preLaunchTask for the dev debug config in launch.json. Builds via
+        // `dependsOn`, then copies the two dynamic_linking runtime DLLs
+        // (`bevy_dylib-*.dll`, `std-*.dll`) next to the exe so Windows finds
+        // them. See `.github/copilot-instructions.md` for the full story.
+        {
+            "label": "dev: build & stage DLLs",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "Copy-Item -Force \"$env:USERPROFILE/.rustup/toolchains/stable-x86_64-pc-windows-msvc/bin/std-*.dll\" \"${workspaceFolder}/target/debug/\"; Copy-Item -Force \"${workspaceFolder}/target/debug/deps/bevy_dylib-*.dll\" \"${workspaceFolder}/target/debug/\""
+            ],
+            "dependsOn": "cargo: build (dev, dynamic linking)",
+            "dependsOrder": "sequence",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "shared"
+            }
+        },
+        // -------------------------------------------------------------------
+        // Run (no debugger — fastest iteration loop)
+        // -------------------------------------------------------------------
+        {
+            "label": "cargo: run (dev, dynamic linking)",
+            "type": "cargo",
+            "command": "run",
+            "args": [
+                "--package",
+                "percussion",
+                "--features",
+                "dev"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "presentation": {
+                "clear": true,
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "cargo: run (release)",
+            "type": "cargo",
+            "command": "run",
+            "args": [
+                "--package",
+                "percussion",
+                "--release"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "presentation": {
+                "clear": true,
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        // -------------------------------------------------------------------
+        // Quality gates
+        // -------------------------------------------------------------------
+        {
+            "label": "cargo: check (workspace)",
+            "type": "cargo",
+            "command": "check",
+            "args": [
+                "--workspace",
+                "--all-targets"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ]
+        },
+        {
+            "label": "cargo: clippy (deny warnings)",
+            "type": "cargo",
+            "command": "clippy",
+            "args": [
+                "--workspace",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ]
+        },
+        {
+            "label": "cargo: test (workspace)",
+            "type": "cargo",
+            "command": "test",
+            "args": [
+                "--workspace"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "cargo: fmt",
+            "type": "cargo",
+            "command": "fmt",
+            "args": [
+                "--all"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}

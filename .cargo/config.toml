@@ -1,0 +1,12 @@
+# Faster linking on Windows (MSVC) using the bundled rust-lld.
+# Recent stable Rust ships `rust-lld` with the MSVC toolchain, so no extra
+# install is needed. This significantly improves incremental link times.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+
+# Faster linker on Linux. Requires the `lld` package to be installed.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# macOS uses the system linker by default; nothing to tweak here.

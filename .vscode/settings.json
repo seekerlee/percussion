@@ -1,0 +1,36 @@
+{
+    // ---------- rust-analyzer ----------
+    // Run `clippy` on save so lints surface alongside compile errors.
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.check.extraArgs": [
+        "--all-targets"
+    ],
+    // Make rust-analyzer aware of the `dev` feature so code paths gated on
+    // it are checked and completions work when you enable it.
+    "rust-analyzer.cargo.features": "all",
+    // Don't run `cargo check` while typing — saves CPU on a Bevy-sized graph.
+    "rust-analyzer.checkOnSave": true,
+    // ---------- editor ----------
+    "editor.formatOnSave": true,
+    "editor.semanticHighlighting.enabled": true,
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        "editor.tabSize": 4,
+        "editor.rulers": [
+            100
+        ]
+    },
+    "[toml]": {
+        "editor.defaultFormatter": "tamasfe.even-better-toml",
+        "editor.formatOnSave": true
+    },
+    // ---------- file / search exclusions ----------
+    // Stop the file watcher and search from chewing through `target/`.
+    "files.watcherExclude": {
+        "**/target/**": true
+    },
+    "search.exclude": {
+        "**/target": true,
+        "**/Cargo.lock": true
+    }
+}
