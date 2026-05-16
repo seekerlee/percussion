@@ -10,6 +10,19 @@
     "rust-analyzer.cargo.features": "all",
     // Don't run `cargo check` while typing — saves CPU on a Bevy-sized graph.
     "rust-analyzer.checkOnSave": true,
+    // Windows DLL fix for rust-analyzer's proc-macro server:
+    //
+    // proc-macro 服务器跑在 toolchain 的 `libexec/` 下，加载
+    // `target/debug/deps/*_macros-*.dll` 时 Windows 找不到这些 DLL 依赖的
+    // `std-*.dll`（住在 toolchain 的 `bin/`），inline 报
+    // "cannot create expander"。`cargo check` 不受影响（rustc 与 std DLL 同目录）。
+    //
+    // 把 toolchain `bin/` 前置进 RA 进程的 PATH，子进程（含 proc-macro 服务器）
+    // 继承后 DLL 解析能命中 `std-*.dll`。改完需在命令面板执行
+    // "rust-analyzer: Restart server" 让设置生效。
+    "rust-analyzer.server.extraEnv": {
+        "PATH": "${userHome}\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\bin;${env:PATH}"
+    },
     // ---------- editor ----------
     "editor.formatOnSave": true,
     "editor.semanticHighlighting.enabled": true,
