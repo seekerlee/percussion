@@ -40,3 +40,36 @@ resolution: (1280u32, 720u32).into(),
 Windows DLL 搜索一定先看 exe 自己的目录，所以这条免疫 PATH / 变量展开的所有怪事。
 
 **维护点**：工具链 triple `stable-x86_64-pc-windows-msvc` 在 staging 任务里硬编码。`rust-toolchain.toml` 的 channel / target 一旦改了，这里**一起改**。
+
+### 调试器下运行卡到无响应 —— Windows "调试堆"在背刺
+
+**症状**：`cargo run` 流畅，**F5 启动调试**就极卡。窗口几秒才出来，鼠标拖不动、关不掉，结束进程要等几分钟。CPU 没满，看着像死锁但其实没死，纯粹响应不过来。
+
+**原因**：跟 LLDB / Rust / Bevy 都没关系。**Windows 内核** 自带的行为：进程在调试器下启动时（`CreateProcess` 带 `DEBUG_PROCESS` 标志），系统**自动**把默认堆切换成"调试堆"。任何调试器都会触发 —— LLDB、Visual Studio、WinDbg 一视同仁。
+
+调试堆为了帮 C/C++ 抓堆 bug 偷偷做的事：
+
+| 操作 | 实际开销 |
+|---|---|
+| `alloc(N)` | 实际分配 `N + guard`，前后填 `0xABABABAB` 检测越界 |
+| `free(p)` | 检查 guard、填 `0xFEEEFEEE`、做全堆一致性扫描 |
+| 始终维护 | 一个全局链表追踪所有 live allocations |
+
+**速度税：alloc/free 慢 10–100 倍**，free 尤其慢。Bevy 这种每帧大量小分配的引擎（ECS 存储 realloc、Text2d 重排版、mesh 顶点缓冲…）会被严重放大，主线程预算溢出 → Windows 消息泵收不到调度 → 看上去窗口"无响应"。
+
+**修复**：在 `launch.json` 的 dev 配置里注入环境变量：
+
+```jsonc
+"env": {
+    "_NO_DEBUG_HEAP": "1"
+}
+```
+
+这是 Windows 自己埋的 opt-out 开关：NT 加载器在进程启动时检查这个变量，**有就跳过调试堆切换**。下划线前缀是变量名的一部分，不能漏。环境变量必须在 `CreateProcess` 之前就有 —— CodeLLDB 的 `env` 块在 spawn 子进程时注入，时机正好。
+
+**副作用对 Rust 项目而言为零**：调试堆原本能抓"堆越界 / use-after-free / double-free"，这些 bug Rust 借用检查器在编译期就消灭了，根本不存在。安全网失效不影响我们。
+
+**别在哪里设这个变量**：
+- ❌ 系统全局环境变量 / 用户环境变量：会影响所有调试进程，过头了
+- ❌ `tasks.json` 的 task：`cargo run` 没问题，不需要
+- ✅ `launch.json` 里**单条调试配置** 的 `env` 块：作用域刚好

@@ -16,7 +16,16 @@
             "preLaunchTask": "dev: build & stage DLLs",
             "program": "${workspaceFolder}/target/debug/percussion.exe",
             "args": [],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            // Windows 在调试器下默认启用 "debug heap"：每次 alloc/free 都做
+            // guard 字节填充和追踪，分配/释放速度比裸跑慢 10–100 倍。Bevy 这种
+            // 每帧大量小分配的引擎会被严重放大（实测：每帧 spawn/despawn Text2d
+            // 时帧时间从微秒级飙到秒级，窗口直接卡死）。下划线开头的环境变量是
+            // Windows 进程级开关，CodeLLDB 在 spawn 子进程前注入即可生效。
+            // 关闭它只影响 debug heap，不影响 LLDB 自身的断点 / 内存检查能力。
+            "env": {
+                "_NO_DEBUG_HEAP": "1"
+            }
         },
         {
             "name": "Debug 'percussion' (release)",
