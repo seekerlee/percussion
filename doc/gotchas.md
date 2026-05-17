@@ -73,3 +73,30 @@ Windows DLL 搜索一定先看 exe 自己的目录，所以这条免疫 PATH / �
 - ❌ 系统全局环境变量 / 用户环境变量：会影响所有调试进程，过头了
 - ❌ `tasks.json` 的 task：`cargo run` 没问题，不需要
 - ✅ `launch.json` 里**单条调试配置** 的 `env` 块：作用域刚好
+
+### 调试器下运行还是卡 —— CodeLLDB 默认 PDB reader 太慢
+
+**症状**：`_NO_DEBUG_HEAP=1` 已经配上、调试堆开销也排除，但 F5 启动**还是**卡。`cargo run` 同代码丝滑、F5 同代码 CPU 满载 GPU 闲、窗口几乎不响应 —— 跟 GPU 渲染问题的"GPU 满 CPU 闲"完全相反，是判别 debugger overhead 的关键信号。
+
+**原因**：CodeLLDB 在 Windows 上默认用 **DIA-based PDB reader**（微软的 COM 组件 DbgHelp/DIA SDK），完整但慢。Bevy 开 `dynamic_linking` 后 exe 拽着几十个 DLL（`bevy_*`、`wgpu_*`、`naga_*`、`std-*`…），调试器启动时挨个 PDB 扫一遍 → CPU 长时间堆积 → 主线程拿不到调度 → 窗口看上去卡死。
+
+**修复**：`.vscode/settings.json` 加一行：
+
+```jsonc
+"lldb.useNativePDBReader": true
+```
+
+切到 CodeLLDB 自带的 native PDB reader。**改完要 Reload Window 才生效**（settings 是启动时读的）。
+
+bisect 实测：单这一项就够，下面这些都不是必要条件，加了也只是杯水车薪 —— 不要无脑全开：
+
+- ❌ `lldb.evaluateForHovers: false`：只在编辑器悬停变量时触发，跟"启动卡死"无关
+- ❌ `lldb.commandCompletions: false`：只在 DEBUG CONSOLE 输入命令时触发，无关
+- ❌ launch.json `initCommands: ["settings set target.preload-symbols false"]`：`useNativePDBReader` 开了之后 preload 已经够快，再延迟也没收益
+
+**跟 `_NO_DEBUG_HEAP` 是独立两件事**：一个是 OS-level 堆开销，一个是 lldb-level PDB 加载开销。Bevy 项目两个都要配。
+
+**诊断顺序**（下次 F5 卡死时按这个排查）：
+1. 看 CPU / GPU 负载 —— CPU 满 GPU 闲 → debugger 锅；GPU 满 CPU 闲 → 引擎 / shader 锅。先分清楚再修。
+2. 检查 `_NO_DEBUG_HEAP=1` 在不在 `launch.json` 的 `env` 里
+3. 检查 `lldb.useNativePDBReader: true` 在不在 `settings.json` 里

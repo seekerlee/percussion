@@ -37,6 +37,19 @@
         "editor.defaultFormatter": "tamasfe.even-better-toml",
         "editor.formatOnSave": true
     },
+    // ---------- CodeLLDB 调试性能 ----------
+    //
+    // F5 调试 Bevy + `dynamic_linking` 会出现 CPU 卡 / GPU 闲 ——
+    // 画面不别，但窗口几乎不响应。cargo run 同代码丝滑，
+    // 说明不是代码 / 游戏逻辑的锁，是调试器本身的开销。
+    //
+    // 最后锁定的主因是这一项 —— codelldb 默认 PDB reader 是
+    // DIA-based（完整但慢），改用 native reader 后 Bevy 依赖森林的
+    // 几十个 PDB 加载速度骤增，F5 启动后不再卡。
+    //
+    // bisect 已证明这一项单独就够；evaluateForHovers / commandCompletions
+    // / target.preload-symbols false 都不需要。
+    "lldb.useNativePDBReader": true,
     // ---------- file / search exclusions ----------
     // Stop the file watcher and search from chewing through `target/`.
     "files.watcherExclude": {
