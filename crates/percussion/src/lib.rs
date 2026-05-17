@@ -14,11 +14,16 @@
 //!
 //! 当前阶段只剩相机 + debug overlay，方便专注调通坐标轴 / 网格的可视化。
 //! 占位 mesh（player / monster / ground / sun）已撤，等可视化敲定再回填。
+//!
+//! 资产组织：`unit` 提供角色身份的共享 marker；`stage` 提供舞台本身；
+//! `player` 是受键盘驱动的一种 unit。
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+pub mod player;
 pub mod stage;
+pub mod unit;
 
 // Dev-only 工具集（gizmo 网格、pan-orbit 相机等）。整段仅在 debug 构建里
 // 编译；release / `--profile dist` 构建里 `dev/` 目录下所有文件都不会被
@@ -51,10 +56,10 @@ impl Plugin for GamePlugin {
         // 具体 plugin（stage / monster / bullet 都要用），放在最顶层避免
         // 重复注册和隐式 plugin 顺序依赖。
         .add_plugins(PhysicsPlugins::default())
-        .add_plugins(stage::StagePlugin)
+        .add_plugins((unit::UnitPlugin, stage::StagePlugin, player::PlayerPlugin))
         .add_systems(
             Startup,
-            (spawn_camera, spawn_global_light, spawn_initial_stage),
+            (spawn_camera, spawn_global_light, spawn_initial_scene),
         );
 
         // 只在 debug 构建（即非 --release / 非 --profile dist）里挂调试可视化 +
@@ -96,13 +101,12 @@ fn spawn_global_light(mut commands: Commands) {
     ));
 }
 
-/// Startup system：在原点 spawn 本游戏的首个 stage。
+/// Startup system：在原点 spawn 本游戏的首个 stage，然后在它里面 spawn 玩家。
 ///
-/// 这是**游戏启动策略**（决定开局长什么样），不是 stage 能力本身 ——
-/// 所以归 `GamePlugin` 管，不归 `StagePlugin`。`StagePlugin` 只提供
-/// [`stage::spawn_stage`] 这个 API，由谁、何时、何地、用什么尺寸调，
-/// 是调用方的决策。
-fn spawn_initial_stage(
+/// 这是**游戏启动策略**（决定开局长什么样），不是某个 plugin 的能力 ——
+/// 所以归 `GamePlugin` 管。`StagePlugin` / `PlayerPlugin` 只提供 spawn API，
+/// 由谁、何时、何地、用什么尺寸调，是调用方的决策。
+fn spawn_initial_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -110,14 +114,25 @@ fn spawn_initial_stage(
     // 初始 stage 尺寸（地面 X × Z 全长，米）—— 本游戏的开局关卡决策，
     // 不是 stage 这个能力的固有属性。
     let size = Vec2::new(20.0, 15.0);
-    // 逻辑顶高（米）：飞过这个高度的子弹算"出界"。保守值，等子弹机制做出来再调。
+    // 盒子净空高度（米）：物理屏障 + 视觉罩的顶面就在这个高度。保守值，
+    // 等子弹弹道做出来再调。
     let height = 10.0;
-    stage::spawn_stage(
+    let stage_entity = stage::spawn_stage(
         &mut commands,
         &mut meshes,
         &mut materials,
         Vec3::ZERO,
         size,
         height,
+    );
+
+    // 玩家在 stage 中央上方 5 米处生成，靠重力落下 —— 可以用肉眼验证
+    // 物理接触、撞 bounds 屏障的反馈都正常工作。
+    player::spawn_player(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        stage_entity,
+        Vec3::new(0.0, 5.0, 0.0),
     );
 }
