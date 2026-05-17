@@ -2,8 +2,7 @@
 
 > **用途**：作为 Bevy 重写项目的输入。
 >
-> **本文档不描述任何实现**——不提 ECS、component、system、plugin、Bevy、Zig、raylib 等技术词汇。
-> 描述的是"游戏要做什么" + "今天 demo 能跑出什么"。
+> 本文档**主要**描述"游戏要做什么" + "今天 demo 能跑出什么"，但也包含若干已确定的跨 PR 工程约束——§七 技术约束、§九 领域纯函数原则。其他实现细节（具体 crate 划分、命名、模块组织）由架构决策记录（ADR）管理，本文档不替代 ADR。
 >
 > 拿到新仓库后，请直接从本文档出发设计架构与代码，**不要参考现有 Zig 实现的目录结构、命名或职责划分**。
 > 现有 Zig 项目是一次设计探索的产物，其架构哲学有价值，但具体实现形态不应作为新项目的参考。
@@ -335,7 +334,102 @@
 
 ---
 
-## 九、推进建议（不强制）
+## 九、领域纯函数原则（编码纪律）
+
+游戏逻辑分两类，按"能不能写成 pure function"切开。这条原则跨整个项目生效，无论 §八 的开放问题怎么决议。
+
+### 9.1 判据
+
+**这个函数能不能换一个 engine 直接复用？**
+
+- 能 → 抽到独立的领域模块（暂定 `domain/`），作为 pure function。
+- 不能 → 留在 system 函数体里，依赖 ECS。
+
+判据等价于"不读写 ECS / 没有副作用"，但用"换 engine"作 thought experiment 更具操作性——立刻就能判断，不需要对纯函数概念有正式训练。
+
+不需要真去换 engine。这只是判据，不是承诺。
+
+### 9.2 抽到 domain 的（pure function）
+
+特点：输入是当前快照数据，输出是新数据或决策。无副作用。
+
+典型例子：
+
+- 伤害计算 `resolve_damage(attacker, defender, weapon, crit) -> u32`
+- 暴击 / 命中判定 `is_crit(rng_state, chance) -> bool`
+- Buff 叠加规则 `stack(existing: &[Buff], new: Buff) -> Vec<Buff>`
+- 装备词缀加成 `final_stats(base, equipment, buffs) -> Stats`
+- XP / 等级曲线 `xp_for_level(level) -> u32`
+- 战利品 roll `roll_loot(table, rng_state) -> Vec<Item>`
+- AI 评分函数 `score_target(my_state, target_state) -> f32`
+
+### 9.3 留在 system 的（ECS 操作）
+
+特点：依赖空间索引、世界状态查询、entity 生成 / 删除、跨 entity 协调、`Res<Time>` 等引擎资源。
+
+典型例子：
+
+- "找最近的敌人"——要空间索引
+- "spawn 一个 projectile"——要 commands
+- "对范围内 N 个单位施加 buff"——要 query 多个 entity
+- "AI 选目标"——查世界状态（**评分函数除外**，那部分是 pure 的）
+- "推进 timer"——要 `Res<Time>`
+
+### 9.4 类型 vs 函数（一处合理松弛）
+
+判据应用到**函数**上，对**类型**可以放松：domain 类型允许挂 `#[derive(Component)]` / `#[derive(Event)]` / `#[derive(Resource)]` 等 Bevy trait derive。
+
+```rust
+// domain/combat.rs
+#[derive(Component, Debug, Clone, Copy)]   // ← Component 是 Bevy
+pub struct Health(pub u32);
+
+pub fn resolve_damage(/* ... */) -> u32 { /* ... */ }   // ← pure function
+```
+
+严格说 `Health` 因为 derive 了 Bevy 的 trait 不算 engine-portable。但：
+
+- 数据形状（一个 `u32`）是 engine-portable 的
+- 操作它的函数是 engine-portable 的
+- 换 engine 时把 derive 改一行就行
+
+solo dev 这种松弛合理。如果将来 domain 真要拆 crate（例如喂给 wasm extension layer），那时再做"数据类型独立 / wrapper component"双份化。**现在不要为这个未来付双份成本**。
+
+**为什么这个松弛安全**：锁定分层级，代价差一两个数量级。
+
+| 层级 | 是什么 | 换 engine 的代价 |
+|---|---|---|
+| 行为锁定 | 函数体里 `Query` / `Commands` / `EventReader` | 重写每个 system |
+| 架构锁定 | 设计哲学只能 ECS | 重新设计 |
+| 类型锁定 | 一行 `#[derive(Event)]` | 一句 sed 替换完事 |
+
+§9 原则的真实价值：把行为 / 架构锁定压到零，容忍类型锁定。这也是 Rust 生态的通行做法——serde / tokio / sqlx 任何一个集成都靠 derive，但没人说“我被 serde 锁定了”。
+
+### 9.5 system 函数体的理想形状
+
+三段式适配器：
+
+```rust
+fn xx_system(/* bevy args */) {
+    // 段 1：从 query/event/res 取数据，转成领域类型
+    // 段 2：调一个或多个 domain pure function
+    // 段 3：把结果写回 commands/events/query
+}
+```
+
+如果某个 system 写到 50 行还看不到 domain 函数调用，几乎肯定有领域逻辑没抽出去。这是 code review 的一个 trigger。
+
+### 9.6 为什么坚持这条
+
+不是为美。三个具体回报：
+
+1. **可测试**：domain 模块不需要 `App` 就能 unit test。`#[test] fn crits_double() { assert_eq!(resolve_damage(...).damage_dealt, 20); }` 而已。
+2. **可读**："战斗规则"和"ECS 数据搬运"分离后，读"战斗规则"时不被 `Query<&mut Health, Without<Invulnerable>>` 一类的样板淹没。
+3. **可未来扩展**：抽出来的 pure function 直接就是将来 binding 给脚本（JS / wasm / Lua）的"动词"。今天 0 成本，将来 0 重写——即使最终没做 extension layer，前两条已经够本。
+
+---
+
+## 十、推进建议（不强制）
 
 按"能跑出可见效果 + 渐进验证"的顺序：
 
@@ -360,7 +454,7 @@
 
 ---
 
-## 十、本文档的使用方式
+## 十一、本文档的使用方式
 
 - 这是 **What**（要做什么），不是 **How**（怎么做）
 - 拿到新仓库后，**先**写一份对应的 ADR（架构决策记录），决定第八节的开放问题
