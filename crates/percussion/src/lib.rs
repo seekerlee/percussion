@@ -15,7 +15,10 @@
 //! 当前阶段只剩相机 + debug overlay，方便专注调通坐标轴 / 网格的可视化。
 //! 占位 mesh（player / monster / ground / sun）已撤，等可视化敲定再回填。
 
+use avian3d::prelude::*;
 use bevy::prelude::*;
+
+pub mod stage;
 
 // 仅 debug 构建编译；发布构建里整段不存在，零运行时开销。
 #[cfg(debug_assertions)]
@@ -42,7 +45,15 @@ impl Plugin for GamePlugin {
             }),
             ..default()
         }))
-        .add_systems(Startup, spawn_camera);
+        // 引擎层基础设施：物理在这里注册。Avian 不属于某个
+        // 具体 plugin（stage / monster / bullet 都要用），放在最顶层避免
+        // 重复注册和隐式 plugin 顺序依赖。
+        .add_plugins(PhysicsPlugins::default())
+        .add_plugins(stage::StagePlugin)
+        .add_systems(
+            Startup,
+            (spawn_camera, spawn_global_light, spawn_initial_stage),
+        );
 
         // 只在 debug 构建（即非 --release / 非 --profile dist）里挂调试可视化。
         // 发布构建里整个模块都不会编译，零运行时开销。
@@ -62,4 +73,49 @@ fn spawn_camera(mut commands: Commands) {
         Camera3d::default(),
         Transform::from_xyz(0.0, y, z).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+}
+
+/// Startup system：spawn 一盏**全局**方向光。
+///
+/// 当前是真正的"全局"——所有 stage 共用这一盏光。这跟 §8.5 的多 stage 同屏
+/// 总览玩法长期会有冲突（每个 stage 应能有自己的氛围），但 per-stage 光照
+/// 隔离要等多 camera + `RenderLayers` 架构落地时再做。现在先用一盏全局光
+/// 把 `StandardMaterial` 点亮，避免一片漆黑。
+///
+/// 放这里而不是 `spawn_initial_stage` 里——它和具体 stage 没有耦合。
+fn spawn_global_light(mut commands: Commands) {
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 5_000.0,
+            shadows_enabled: false,
+            ..default()
+        },
+        Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+}
+
+/// Startup system：在原点 spawn 本游戏的首个 stage。
+///
+/// 这是**游戏启动策略**（决定开局长什么样），不是 stage 能力本身 ——
+/// 所以归 `GamePlugin` 管，不归 `StagePlugin`。`StagePlugin` 只提供
+/// [`stage::spawn_stage`] 这个 API，由谁、何时、何地、用什么尺寸调，
+/// 是调用方的决策。
+fn spawn_initial_stage(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    // 初始 stage 尺寸（地面 X × Z 全长，米）—— 本游戏的开局关卡决策，
+    // 不是 stage 这个能力的固有属性。
+    let size = Vec2::new(20.0, 15.0);
+    // 逻辑顶高（米）：飞过这个高度的子弹算"出界"。保守值，等子弹机制做出来再调。
+    let height = 10.0;
+    stage::spawn_stage(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        Vec3::ZERO,
+        size,
+        height,
+    );
 }
