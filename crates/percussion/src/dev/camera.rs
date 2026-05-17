@@ -1,11 +1,15 @@
-//! 开发时相机控制器 —— 仅在 `debug_assertions` 启用时编译 / 注册。
+//! 开发时相机控制器 —— pan-orbit + WASD。
+//!
+//! 本模块由 `crate::dev` 在 `#[cfg(debug_assertions)]` 下统一编译；release
+//! 构建里整个 `dev` 模块不存在，相机保留 `lib.rs::spawn_camera` 给的固定
+//! 俯视斜角姿态。
 //!
 //! # 心智模型
 //!
-//! 这不是"游戏相机"的替代品，而是**开发期工具**：在 release 构建里整个
-//! 文件不编译，相机保留 `lib.rs::spawn_camera` 给的固定俯视斜角姿态。
-//! 在 debug 构建里挂上 [`bevy_panorbit_camera::PanOrbitCamera`] 组件，
-//! 让原本固定的相机变得可拖动 / 缩放 / WASD 平移。
+//! 这不是"游戏相机"的替代品，而是**开发期工具**：在 debug 构建里给
+//! `lib.rs::spawn_camera` spawn 的 Camera3d 挂上
+//! [`bevy_panorbit_camera::PanOrbitCamera`] 组件，让原本固定的相机变得可
+//! 拖动 / 缩放 / WASD 平移。
 //!
 //! # 操作
 //!
@@ -32,7 +36,7 @@ use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 use std::f32::consts::FRAC_PI_4;
 
 /// 初始 pitch（弧度），对齐 `lib.rs::CAMERA_PITCH_DEG` 的 45°。
-/// 不直接复用 lib 里的常量是为了让 dev_camera 自包含 —— 改这里不影响
+/// 不直接复用 lib 里的常量是为了让 dev 相机自包含 —— 改这里不影响
 /// release 构建里的相机姿态。
 const INITIAL_PITCH: f32 = FRAC_PI_4;
 /// 相机到 focus 的初始距离（米），对齐 `lib.rs::CAMERA_DISTANCE`。
@@ -41,9 +45,9 @@ const INITIAL_RADIUS: f32 = 12.0;
 const PAN_SPEED: f32 = 8.0;
 
 /// Dev camera 插件。仅 debug 构建里被 [`GamePlugin`](crate::GamePlugin) 注册。
-pub struct DevCameraPlugin;
+pub struct CameraPlugin;
 
-impl Plugin for DevCameraPlugin {
+impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(PanOrbitCameraPlugin)
             .add_systems(PostStartup, attach_pan_orbit)

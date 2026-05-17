@@ -20,14 +20,11 @@ use bevy::prelude::*;
 
 pub mod stage;
 
-// 仅 debug 构建编译；发布构建里整段不存在，零运行时开销。
+// Dev-only 工具集（gizmo 网格、pan-orbit 相机等）。整段仅在 debug 构建里
+// 编译；release / `--profile dist` 构建里 `dev/` 目录下所有文件都不会被
+// 编译，零运行时开销。
 #[cfg(debug_assertions)]
-mod debug;
-
-// Dev 相机控制器（pan-orbit + WASD），同样仅 debug 构建。详见
-// `dev_camera.rs` 模块文档。
-#[cfg(debug_assertions)]
-mod dev_camera;
+mod dev;
 
 /// 相机俯视斜角（度）。具体最终值在 `doc/game-design.md` §17 待决，
 /// 暂用 45°（饥荒视角的大致区间）。
@@ -61,9 +58,9 @@ impl Plugin for GamePlugin {
         );
 
         // 只在 debug 构建（即非 --release / 非 --profile dist）里挂调试可视化 +
-        // dev 相机控制器。发布构建里两个模块都不会编译，零运行时开销。
+        // dev 相机控制器。发布构建里 `dev` 模块都不会编译，零运行时开销。
         #[cfg(debug_assertions)]
-        app.add_plugins((debug::DebugOverlayPlugin, dev_camera::DevCameraPlugin));
+        app.add_plugins((dev::grid::GridPlugin, dev::camera::CameraPlugin));
     }
 }
 

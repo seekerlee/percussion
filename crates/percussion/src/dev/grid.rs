@@ -1,8 +1,7 @@
-//! Debug 可视化插件。
+//! XZ 地面网格 + 原点三轴可视化。
 //!
-//! 整个文件仅在 `debug_assertions` 开启（即非 `--release` / 非 `--profile dist`
-//! 构建）时编译。发布构建里 `lib.rs` 用 `#[cfg(debug_assertions)] mod debug;`
-//! 把这个模块整段跳过，零运行时开销。
+//! 本模块由 `crate::dev` 在 `#[cfg(debug_assertions)]` 下统一编译。发布
+//! 构建里整个 `dev` 模块都不存在，零运行时开销。
 //!
 //! 当前包含：
 //! - XZ 地面平面上的灰色网格（每 `GRID_STEP` 单位一条线）
@@ -26,10 +25,10 @@ const GRID_STEP: f32 = 1.0;
 /// 网格半边长：以原点为中心 ±`GRID_EXTENT` 的方形覆盖。
 const GRID_EXTENT: f32 = 20.0;
 
-/// Debug 可视化插件。挂上后启用 XZ 地面网格 + 三轴可视化。
-pub struct DebugOverlayPlugin;
+/// 网格 + 三轴可视化插件。
+pub struct GridPlugin;
 
-impl Plugin for DebugOverlayPlugin {
+impl Plugin for GridPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, draw_grid);
     }
