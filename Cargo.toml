@@ -11,6 +11,11 @@ authors = []
 
 [workspace.dependencies]
 bevy = "0.18.1"
+avian3d = "0.6.1"
+# Pan/orbit camera controller — used only by the dev-build camera helper
+# (see crates/percussion/src/dev_camera.rs). Release builds gate the module
+# behind `cfg(debug_assertions)` so this dep does not enter the shipped binary.
+bevy_panorbit_camera = "0.34"
 
 # ---------------------------------------------------------------------------
 # Profile tuning

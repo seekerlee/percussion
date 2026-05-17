@@ -18,6 +18,8 @@ path = "src/main.rs"
 
 [dependencies]
 bevy = { workspace = true }
+avian3d = { workspace = true }
+bevy_panorbit_camera = { workspace = true }
 
 [features]
 default = []

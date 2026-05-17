@@ -24,6 +24,11 @@ pub mod stage;
 #[cfg(debug_assertions)]
 mod debug;
 
+// Dev 相机控制器（pan-orbit + WASD），同样仅 debug 构建。详见
+// `dev_camera.rs` 模块文档。
+#[cfg(debug_assertions)]
+mod dev_camera;
+
 /// 相机俯视斜角（度）。具体最终值在 `doc/game-design.md` §17 待决，
 /// 暂用 45°（饥荒视角的大致区间）。
 const CAMERA_PITCH_DEG: f32 = 45.0;
@@ -55,10 +60,10 @@ impl Plugin for GamePlugin {
             (spawn_camera, spawn_global_light, spawn_initial_stage),
         );
 
-        // 只在 debug 构建（即非 --release / 非 --profile dist）里挂调试可视化。
-        // 发布构建里整个模块都不会编译，零运行时开销。
+        // 只在 debug 构建（即非 --release / 非 --profile dist）里挂调试可视化 +
+        // dev 相机控制器。发布构建里两个模块都不会编译，零运行时开销。
         #[cfg(debug_assertions)]
-        app.add_plugins(debug::DebugOverlayPlugin);
+        app.add_plugins((debug::DebugOverlayPlugin, dev_camera::DevCameraPlugin));
     }
 }
 
