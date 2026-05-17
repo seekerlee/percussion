@@ -5,97 +5,80 @@
 //! 把这个模块整段跳过，零运行时开销。
 //!
 //! 当前包含：
-//! - 原点坐标轴（红色 X / 绿色 Y）+ 灰色辅助网格（Gizmos 每帧重绘）
-//! - 给每个 `Player` / `Monster` 头顶挂一个动态坐标标签
+//! - XZ 地面平面上的灰色网格（每 `GRID_STEP` 单位一条线）
+//! - 原点三轴（X 红 / Y 绿 / Z 蓝）—— Bevy 3D 标准配色
+//!
+//! 视觉技术路线见 `doc/game-design.md` §15（3D 世界 + 全 2D sprite + Y 轴
+//! billboard）。网格画在 XZ 平面 Y=0，配合 lib.rs 的俯视斜角相机。
+//!
+//! # 关于"动态视野范围"
+//!
+//! 早期 2D 版本用 `OrthographicProjection.area` 算出"当前可见矩形"动态裁
+//! 网格。3D 透视相机的可见地面是一个**梯形**（视锥与 Y=0 平面相交后的四边
+//! 形，且边平行于相机视锥而不是世界轴），算起来更复杂；原型期先用以原点
+//! 为中心 ±`GRID_EXTENT` 的固定方形网格，等真正需要"无限网格"再换 shader
+//! 方式（地面 grid shader 是 3D 项目的标准做法）。
 
-// Bevy 的 Query 类型本身就长，type_complexity 这条 lint 在 Bevy 项目里通常被
-// 整体放行。范围仅限本文件，不影响业务模块。
-#![allow(clippy::type_complexity)]
-
-use crate::{Monster, Player};
 use bevy::prelude::*;
 
-/// Debug 可视化插件。挂上后启用网格、坐标轴、实体坐标标签。
+/// 网格间距：1 单位（约 1 米）一条线。
+const GRID_STEP: f32 = 1.0;
+/// 网格半边长：以原点为中心 ±`GRID_EXTENT` 的方形覆盖。
+const GRID_EXTENT: f32 = 20.0;
+
+/// Debug 可视化插件。挂上后启用 XZ 地面网格 + 三轴可视化。
 pub struct DebugOverlayPlugin;
 
 impl Plugin for DebugOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (attach_position_labels, update_position_labels, draw_grid),
-        );
+        app.add_systems(Update, draw_grid);
     }
 }
 
-/// 跟随某个目标实体显示其世界坐标的浮动标签。
-#[derive(Component)]
-struct PositionLabel(Entity);
-
-/// 给新出现的 Player / Monster 各生成一个独立标签实体，避免父子关系带来的
-/// query 复杂度。标签自己持有目标实体 ID，每帧自行同步位置和文本。
-fn attach_position_labels(
-    mut commands: Commands,
-    targets: Query<Entity, Or<(Added<Player>, Added<Monster>)>>,
-) {
-    for entity in &targets {
-        commands.spawn((
-            PositionLabel(entity),
-            Text2d::new(""),
-            TextFont {
-                font_size: 11.0,
-                ..default()
-            },
-            TextColor(Color::srgb(1.0, 1.0, 1.0)),
-            Transform::default(),
-        ));
-    }
-}
-
-/// 每帧：读目标实体 Transform → 写标签文本 + 把标签摆到目标头顶。
-/// 目标若已 despawn 则静默跳过（标签会留下，原型阶段不必清理）。
-fn update_position_labels(
-    targets: Query<&Transform, Without<PositionLabel>>,
-    mut labels: Query<(&PositionLabel, &mut Transform, &mut Text2d)>,
-) {
-    for (label, mut label_tf, mut text) in &mut labels {
-        let Ok(target_tf) = targets.get(label.0) else {
-            continue;
-        };
-        let pos = target_tf.translation.truncate();
-        text.0 = format!("({:.0}, {:.0})", pos.x, pos.y);
-        label_tf.translation = (pos + Vec2::new(0.0, 28.0)).extend(1.0);
-    }
-}
-
-/// 用 Gizmos 画原点坐标轴 + 灰色辅助网格，每帧重绘。
+/// 用 Gizmos 在 XZ 平面（Y=0）画网格 + 原点三轴。每帧重绘。
 fn draw_grid(mut gizmos: Gizmos) {
-    const HALF_EXTENT: f32 = 600.0;
-    const CELL: f32 = 100.0;
-
     let grid = Color::srgb(0.25, 0.25, 0.28);
     let axis_x = Color::srgb(1.0, 0.3, 0.3);
     let axis_y = Color::srgb(0.3, 1.0, 0.3);
+    let axis_z = Color::srgb(0.3, 0.5, 1.0);
 
-    // 网格：每 CELL 单位一条灰线
-    let cells = (HALF_EXTENT / CELL) as i32;
-    for i in -cells..=cells {
+    let steps = (GRID_EXTENT / GRID_STEP) as i32;
+
+    // XZ 平面网格：跳过 0（那两条由主轴接管，颜色不同）。
+    for i in -steps..=steps {
         if i == 0 {
-            continue; // 0 这条留给主轴单独画
+            continue;
         }
-        let v = i as f32 * CELL;
-        gizmos.line_2d(Vec2::new(v, -HALF_EXTENT), Vec2::new(v, HALF_EXTENT), grid);
-        gizmos.line_2d(Vec2::new(-HALF_EXTENT, v), Vec2::new(HALF_EXTENT, v), grid);
+        let coord = i as f32 * GRID_STEP;
+        // 平行于 X 轴的线（z 固定）
+        gizmos.line(
+            Vec3::new(-GRID_EXTENT, 0.0, coord),
+            Vec3::new(GRID_EXTENT, 0.0, coord),
+            grid,
+        );
+        // 平行于 Z 轴的线（x 固定）
+        gizmos.line(
+            Vec3::new(coord, 0.0, -GRID_EXTENT),
+            Vec3::new(coord, 0.0, GRID_EXTENT),
+            grid,
+        );
     }
 
-    // 主轴：X 红 / Y 绿
-    gizmos.line_2d(
-        Vec2::new(-HALF_EXTENT, 0.0),
-        Vec2::new(HALF_EXTENT, 0.0),
+    // 三轴：X 红、Z 蓝（贴地），Y 绿（穿过原点上下贯通 ±GRID_EXTENT）。
+    // 三轴长度一致，方便目视判断空间方向。
+    gizmos.line(
+        Vec3::new(-GRID_EXTENT, 0.0, 0.0),
+        Vec3::new(GRID_EXTENT, 0.0, 0.0),
         axis_x,
     );
-    gizmos.line_2d(
-        Vec2::new(0.0, -HALF_EXTENT),
-        Vec2::new(0.0, HALF_EXTENT),
+    gizmos.line(
+        Vec3::new(0.0, 0.0, -GRID_EXTENT),
+        Vec3::new(0.0, 0.0, GRID_EXTENT),
+        axis_z,
+    );
+    gizmos.line(
+        Vec3::new(0.0, -GRID_EXTENT, 0.0),
+        Vec3::new(0.0, GRID_EXTENT, 0.0),
         axis_y,
     );
 }
