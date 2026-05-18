@@ -16,9 +16,10 @@
 //! 移动速度）也只是 prototype 值。
 
 use avian3d::prelude::*;
-use bevy::image::{ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
+use bevy_asset_loader::prelude::*;
 
+use crate::app_state::AppState;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
 use crate::unit::{DamageMessage, Dead, Health, Unit};
 
@@ -46,8 +47,29 @@ const PLAYER_SPRITE_OFFSET_Y: f32 = (PLAYER_SPRITE_HEIGHT - PLAYER_COLLIDER_SIZE
 const PLAYER_SPEED: f32 = 5.0;
 /// 玩家初始最大生命值。数值是 prototype 阶段的占位，等战斗公式立起来再调。
 const PLAYER_MAX_HEALTH: f32 = 100.0;
-/// 玩家 sprite 贴图资产路径（相对 `assets/`）。
-const PLAYER_SPRITE_ASSET: &str = "sprites/player.png";
+
+/// 玩家用的预加载资产集合。
+///
+/// 由 [`bevy_asset_loader`] 在 [`AppState::Loading`] 阶段填充：宏自动
+/// 生成的 `AssetCollection::create` 会 `asset_server.load_with_settings`
+/// 出 handle、监控就绪、最后把这个结构体作为 `Resource` insert 进 World。
+/// 因此在 [`AppState::InGame`] 的 `OnEnter` 或后续 system 里 `Res<PlayerAssets>`
+/// 拿到时，`sprite` handle **保证已完成加载** —— 调用 `spawn_player` 不用再担
+/// 心“贴图还在路上”。
+///
+/// # 采样器：nearest
+///
+/// `#[asset(image(sampler(filter = nearest)))]` 等同于手写 `ImageSamplerDescriptor::nearest()`
+/// —— 保留像素边缘锐利，不让 linear 插值把像素艺术糊掉。
+#[derive(AssetCollection, Resource)]
+pub struct PlayerAssets {
+    /// 玩家身体 sprite 贴图。当前是 128×64 单图（人物画在中间，左右大
+    /// 片透明）。未来换 sprite sheet 时，可以在 `AssetCollection` 里加
+    /// `texture_atlas_layout` 属性，让 bevy_asset_loader 直接吐 `Handle<TextureAtlasLayout>`。
+    #[asset(path = "sprites/player.png")]
+    #[asset(image(sampler(filter = nearest)))]
+    pub sprite: Handle<Image>,
+}
 
 /// 玩家标记。
 ///
@@ -64,11 +86,19 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        // 放 `Update`：直接按 `delta_time` 加 Transform 位移，不走 avian 的
-        // 速度积分。这样输入→位移→渲染全在同一帧、变帧率响应，避开
-        // 物理 FixedPostUpdate 64Hz 节拍带来的输入延迟。avian 的 sync 默认
-        // 双向（见 `PhysicsTransformConfig`），下一个物理 tick 会把我们
-        // 写的 Transform 同步到内部 Position，碰撞 / 重力照常工作。
+        // 把 PlayerAssets 挂到 AppState::Loading 阶段的 LoadingState 上。
+        // 这一步要求 `AppStatePlugin` 已经 add 过 —— 见 lib.rs 里的注册顺序。
+        // 等所有挂在此 LoadingState 上的 collection 都就绪，bevy_asset_loader
+        // 会自动把 `PlayerAssets` insert 成 Resource，并把 state 切到 InGame。
+        app.configure_loading_state(
+            LoadingStateConfig::new(AppState::Loading).load_collection::<PlayerAssets>(),
+        );
+
+        // 玩家移动：每帧根据输入写 `LinearVelocity`，物理在 `FixedPostUpdate`
+        // 64Hz 积分。配合 entity 上的 `TransformInterpolation`，资产同帧间插值到
+        // 渲染帧率，避开「物理 tick 跳跳」造成的可见顿温。Update 里写位
+        // FixedUpdate 里写都可以：`pressed` 是连续状态，多次写同一个值无损失，
+        // Update 频率高一点起码保证下个物理 tick 看到的是最新输入。
         app.add_systems(Update, player_movement);
 
         // debug 调试快捷键仅 debug 构建编译，release / dist 零运行开销。
@@ -97,26 +127,22 @@ impl Plugin for PlayerPlugin {
 ///
 /// # 参数
 ///
+/// - `player_assets`：[`PlayerAssets`] 资源，由 LoadingState 保证就绪
 /// - `parent_stage`：[`spawn_stage`](crate::stage::spawn_stage) 返回的根 entity
 /// - `local_pos`：stage 局部坐标系下的初始位置（Y > 0 让玩家从空中落下）
 pub fn spawn_player(
     commands: &mut Commands,
-    asset_server: &AssetServer,
+    player_assets: &PlayerAssets,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     parent_stage: Entity,
     local_pos: Vec3,
 ) -> Entity {
-    // sprite 贴图：nearest filter 保留像素边缘锐利，不要 linear 插值变糊。
-    let texture: Handle<Image> = asset_server.load_with_settings(
-        PLAYER_SPRITE_ASSET,
-        |settings: &mut ImageLoaderSettings| {
-            settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::nearest());
-        },
-    );
+    // sprite 贴图：采样器（nearest）已经在 PlayerAssets 加载时设过，这里
+    // 只需 clone handle 拿来当 material 的 base_color_texture。
     let sprite_mesh = meshes.add(Rectangle::new(PLAYER_SPRITE_WIDTH, PLAYER_SPRITE_HEIGHT));
     let sprite_material = materials.add(StandardMaterial {
-        base_color_texture: Some(texture),
+        base_color_texture: Some(player_assets.sprite.clone()),
         // Mask：alpha > cutoff 不透，否则完全透 —— 贴图边缘干净。不用 Blend
         // 是因为 Blend 要按深度排序，多个 sprite 重叠时会闪。
         alpha_mode: AlphaMode::Mask(0.5),
@@ -145,6 +171,12 @@ pub fn spawn_player(
             // 表现为"按方向键先顿一下才动"。player 这种随时被输入驱动的实
             // 体本来就不应该睡，多一次空积分相比手感损失完全划算。
             SleepingDisabled,
+            // 帮 avian 在两个物理 tick 之间平滑插值 Transform：物理 64Hz
+            // 跑，渲染 144Hz，默认 sync 下连续几帧会看到同一个 Transform
+            // （22/22/22/45/45/45 这种跳进），加这个后变成「按 overstep」平滑
+            // lerp，几乎消除可见顿温。需要物理驱动位移才生效，所以
+            // `player_movement` 上面写 LinearVelocity 而不是直接改 Transform。
+            TransformInterpolation,
             // Bevy 0.18 relationship API：把自己挂成 parent_stage 的子实体。
             ChildOf(parent_stage),
         ))
@@ -163,9 +195,12 @@ pub fn spawn_player(
     player_entity
 }
 
-/// 方向键移动玩家：直接按 `delta_time` 在 Transform 上加 X/Z 位移；Y 留给
-/// 物理（重力 + 地面碰撞）。这避开 avian 物理 tick 节拍带来的输入延迟，
-/// 输入 → 位移 → 渲染同帧完成，按键即响应。
+/// 方向键移动玩家：每帧根据按键设置 X/Z 方向线速度，Y 由重力管。
+///
+/// 为什么写速度而不是直接写 Transform：玩家挂了 `TransformInterpolation`，
+/// 物理 64Hz 跑、插值系统把渲染的 Transform 在两个物理 tick 之间平滑
+/// lerp。如果我们在 `Update` 里手写 Transform，插值状态会被识别为"外部改
+/// 动"而重置，等于白做；写速度让物理驱动 `Position`，插值才生效。
 ///
 /// 朝向约定：相机在 +Y +Z 看向原点（见 `lib.rs::spawn_camera`），所以屏幕
 /// 上"远端 = -Z"。WASD 留给 dev 相机（见 `dev_camera.rs`），玩家用方向键。
@@ -178,9 +213,8 @@ pub fn spawn_player(
 /// `Without<Dead>` 是 unit 模块的全局约定（见该模块顶部文档）：死了的
 /// unit 不走移动逻辑，躺到原地。
 fn player_movement(
-    time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
-    mut q_player: Query<&mut Transform, (With<Player>, Without<Dead>)>,
+    mut q_player: Query<&mut LinearVelocity, (With<Player>, Without<Dead>)>,
 ) {
     let mut input = Vec2::ZERO;
     if keys.pressed(KeyCode::ArrowUp) {
@@ -195,15 +229,16 @@ fn player_movement(
     if keys.pressed(KeyCode::ArrowRight) {
         input.x += 1.0;
     }
-    if input.length_squared() == 0.0 {
-        return;
-    }
-    let dir = input.normalize();
-    let dt = time.delta_secs();
-    for mut transform in &mut q_player {
-        // 只动 X / Z；Y 不碰，让重力 / 地面碰撞继续管。
-        transform.translation.x += dir.x * PLAYER_SPEED * dt;
-        transform.translation.z += dir.y * PLAYER_SPEED * dt;
+    let target_xz = if input.length_squared() > 0.0 {
+        input.normalize() * PLAYER_SPEED
+    } else {
+        Vec2::ZERO
+    };
+
+    for mut vel in &mut q_player {
+        // 只覆盖 X / Z；Y 留给重力，玩家会自然贴着地面。
+        vel.x = target_xz.x;
+        vel.z = target_xz.y;
     }
 }
 

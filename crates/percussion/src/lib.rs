@@ -21,6 +21,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+pub mod app_state;
 pub mod player;
 pub mod sprite_billboard;
 pub mod stage;
@@ -81,16 +82,22 @@ impl Plugin for GamePlugin {
         // 具体 plugin（stage / monster / bullet 都要用），放在最顶层避免
         // 重复注册和隐式 plugin 顺序依赖。
         .add_plugins(PhysicsPlugins::default())
+        // AppState 状态机 + LoadingState 框架。**必须在下面任何调用
+        // `configure_loading_state` 的领域 plugin（如 `PlayerPlugin`）之前**
+        // add，否则 LoadingState 还没注册，配置请求会 panic。
+        .add_plugins(app_state::AppStatePlugin)
         .add_plugins((
             unit::UnitPlugin,
             sprite_billboard::BillboardPlugin,
             stage::StagePlugin,
             player::PlayerPlugin,
         ))
-        .add_systems(
-            Startup,
-            (spawn_camera, spawn_global_light, spawn_initial_scene),
-        );
+        .add_systems(Startup, (spawn_camera, spawn_global_light))
+        // 初始场景放到 `OnEnter(InGame)`：进到这个 state 时所有
+        // `AssetCollection` 都保证已 insert，spawn 路径里 `Res<PlayerAssets>`
+        // 拿到的 handle 全部已加载完成。相机 / 全局光留在 `Startup`——
+        // 加载阶段也要有相机和光才能画 loading UI / debug 网格。
+        .add_systems(OnEnter(app_state::AppState::InGame), spawn_initial_scene);
 
         // 只在 debug 构建（即非 --release / 非 --profile dist）里挂调试可视化 +
         // dev 相机控制器。发布构建里 `dev` 模块都不会编译，零运行时开销。
@@ -131,14 +138,18 @@ fn spawn_global_light(mut commands: Commands) {
     ));
 }
 
-/// Startup system：在原点 spawn 本游戏的首个 stage，然后在它里面 spawn 玩家。
+/// `OnEnter(AppState::InGame)` system：在原点 spawn 本游戏的首个 stage，然后在它里面 spawn 玩家。
 ///
 /// 这是**游戏启动策略**（决定开局长什么样），不是某个 plugin 的能力 ——
 /// 所以归 `GamePlugin` 管。`StagePlugin` / `PlayerPlugin` 只提供 spawn API，
 /// 由谁、何时、何地、用什么尺寸调，是调用方的决策。
+///
+/// 资产需求通过 [`player::PlayerAssets`] 资源注入：能走到这里说明
+/// `LoadingState` 已经把所有 `AssetCollection` 填好并 insert 为 Resource，
+/// 不需要再绕道 `AssetServer` 手工 `load(...)`。
 fn spawn_initial_scene(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    player_assets: Res<player::PlayerAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -161,7 +172,7 @@ fn spawn_initial_scene(
     // 物理接触、撞 bounds 屏障的反馈都正常工作。
     player::spawn_player(
         &mut commands,
-        &asset_server,
+        &player_assets,
         &mut meshes,
         &mut materials,
         stage_entity,
