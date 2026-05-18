@@ -19,12 +19,16 @@ path = "src/main.rs"
 [dependencies]
 bevy = { workspace = true }
 avian3d = { workspace = true }
+bevy_sprite3d = { workspace = true }
+bevy_asset_loader = { workspace = true }
 bevy_panorbit_camera = { workspace = true }
+bevy-inspector-egui = { workspace = true }
 
 [features]
 default = []
 
 # Enable with `cargo run --features dev`.
 # Uses Bevy's dynamic linking for much faster iterative compile times during
-# development. Do NOT enable this for release builds.
-dev = ["bevy/dynamic_linking"]
+# development, and pulls in `bevy_dev_tools` (FPS overlay, etc.).
+# Do NOT enable this for release builds.
+dev = ["bevy/dynamic_linking", "bevy/bevy_dev_tools"]
