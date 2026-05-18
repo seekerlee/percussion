@@ -8,6 +8,7 @@
 //!
 //! - [`grid`]：XZ 地面网格 + 原点三轴的 gizmo 可视化
 //! - [`camera`]：pan-orbit + WASD 相机控制器，把固定相机变得可拖动
+//! - [`inspector`]：egui World inspector，运行时编辑任意 Reflect 组件
 //!
 //! # 加东西的约定
 //!
@@ -20,3 +21,4 @@
 
 pub mod camera;
 pub mod grid;
+pub mod inspector;

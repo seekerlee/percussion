@@ -32,7 +32,7 @@
 //! 点完全留在 dev 模块里，lib.rs 不需要知道 `bevy_panorbit_camera` 存在。
 
 use bevy::prelude::*;
-use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
+use bevy_panorbit_camera::{EguiWantsFocus, PanOrbitCamera, PanOrbitCameraPlugin};
 use std::f32::consts::FRAC_PI_4;
 
 /// 初始 pitch（弧度），对齐 `lib.rs::CAMERA_PITCH_DEG` 的 45°。
@@ -86,11 +86,26 @@ fn attach_pan_orbit(
 ///
 /// 写到 `target_focus`（不是 `focus`）让 PanOrbitCamera 自带的平滑插值
 /// 能介入。如果直接写 `focus`，会跟 `target_focus` 打架。
+///
+/// # egui focus 守卫
+///
+/// `bevy_panorbit_camera` 开了 `bevy_egui` feature 后会自动 init
+/// `EguiWantsFocus` 资源（见 workspace `Cargo.toml`）。该资源的
+/// `prev` / `curr` 分别表示上一帧 / 当前帧 egui 是否需要鼠标 / 键盘焦点。
+/// panorbit 自己用 `!prev && !curr` 才接收输入，这里 WASD 平移同样照
+/// 抄——避免在 inspector 数字输入框敲字时同时触发相机移动。
 fn wasd_pan(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
+    egui_focus: Res<EguiWantsFocus>,
     mut q_cam: Query<(&Transform, &mut PanOrbitCamera)>,
 ) {
+    // egui 上一帧或当前帧想要键盘焦点 → 让出输入。两帧都看是为了避免
+    // 焦点切换瞬间的"穿透"——跟 panorbit 内部判断口径保持一致。
+    if egui_focus.prev || egui_focus.curr {
+        return;
+    }
+
     let mut input = Vec2::ZERO; // x = 右, y = 前
     if keys.pressed(KeyCode::KeyW) {
         input.y += 1.0;

@@ -100,9 +100,14 @@ impl Plugin for GamePlugin {
         .add_systems(OnEnter(app_state::AppState::InGame), spawn_initial_scene);
 
         // 只在 debug 构建（即非 --release / 非 --profile dist）里挂调试可视化 +
-        // dev 相机控制器。发布构建里 `dev` 模块都不会编译，零运行时开销。
+        // dev 相机控制器 + egui inspector。发布构建里 `dev` 模块都不会编译，
+        // 零运行时开销。
         #[cfg(debug_assertions)]
-        app.add_plugins((dev::grid::GridPlugin, dev::camera::CameraPlugin));
+        app.add_plugins((
+            dev::grid::GridPlugin,
+            dev::camera::CameraPlugin,
+            dev::inspector::InspectorPlugin,
+        ));
     }
 }
 
