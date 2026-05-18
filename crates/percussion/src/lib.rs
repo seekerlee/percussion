@@ -22,6 +22,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 pub mod player;
+pub mod sprite_billboard;
 pub mod stage;
 pub mod unit;
 
@@ -44,19 +45,48 @@ pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Percussion".into(),
-                resolution: (1280u32, 720u32).into(),
-                ..default()
-            }),
-            ..default()
-        }))
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Percussion".into(),
+                        resolution: (1280u32, 720u32).into(),
+                        ..default()
+                    }),
+                    ..default()
+                })
+                // Bevy 把 asset 文件 dir 拼成 `<base_path>/<file_path>`，
+                // 其中 base_path 优先取 `BEVY_ASSET_ROOT` env，否则取
+                // `CARGO_MANIFEST_DIR` env，否则取 exe 所在目录。
+                //
+                // 本项目 assets/ 在 workspace root，但：
+                // - `cargo run` 时 CARGO_MANIFEST_DIR = `crates/percussion/`
+                //   （binary crate 的 manifest 目录，不是 workspace root）
+                // - LLDB 直接拉 exe 时 base_path = `target/debug/`
+                //
+                // 两种 dev 启动方式下 base_path 恰好都比 workspace root
+                // 深两级，所以 file_path 设 "../../assets" 在两种情况下都
+                // 指向 workspace root 的 assets/。release 部署假设 assets/
+                // 跟 exe 同目录，走默认 "assets"。
+                .set(AssetPlugin {
+                    file_path: if cfg!(debug_assertions) {
+                        "../../assets".to_string()
+                    } else {
+                        "assets".to_string()
+                    },
+                    ..default()
+                }),
+        )
         // 引擎层基础设施：物理在这里注册。Avian 不属于某个
         // 具体 plugin（stage / monster / bullet 都要用），放在最顶层避免
         // 重复注册和隐式 plugin 顺序依赖。
         .add_plugins(PhysicsPlugins::default())
-        .add_plugins((unit::UnitPlugin, stage::StagePlugin, player::PlayerPlugin))
+        .add_plugins((
+            unit::UnitPlugin,
+            sprite_billboard::BillboardPlugin,
+            stage::StagePlugin,
+            player::PlayerPlugin,
+        ))
         .add_systems(
             Startup,
             (spawn_camera, spawn_global_light, spawn_initial_scene),
@@ -108,6 +138,7 @@ fn spawn_global_light(mut commands: Commands) {
 /// 由谁、何时、何地、用什么尺寸调，是调用方的决策。
 fn spawn_initial_scene(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -130,6 +161,7 @@ fn spawn_initial_scene(
     // 物理接触、撞 bounds 屏障的反馈都正常工作。
     player::spawn_player(
         &mut commands,
+        &asset_server,
         &mut meshes,
         &mut materials,
         stage_entity,
