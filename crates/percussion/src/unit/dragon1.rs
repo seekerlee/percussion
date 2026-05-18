@@ -19,16 +19,23 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
 
+use super::{Body, Health, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
-use super::{Health, Unit};
 
 // ============================================================================
 // TODO（你来填）：以下常量是占位值，按 sprite 实际像素 / 期望血量改。
 // ============================================================================
 
-/// 物理盒边长（米）。1m 立方体先占位，跟 sprite 视觉尺寸独立。
-const DRAGON1_COLLIDER_SIZE: f32 = 1.0;
+/// Dragon1 物理 body 半径（米）。body 是 capsule，**总高**由共享常量
+/// [`UNIT_BODY_HEIGHT`] 决定，这里只控制半径 = 俯视 XZ 上的推挤占位。
+///
+/// 与玩家同取 0.4。同高的 capsule 互推时 —— 以后加出不同 R 的 unit
+/// 也不会 Y 抽（原理见 [`UNIT_BODY_HEIGHT`] 文档）。必须 ≤
+/// `UNIT_BODY_HEIGHT / 2`，否则 capsule length 负。
+const DRAGON1_BODY_RADIUS: f32 = 0.4;
+/// capsule 的圆柱段长度（不含两端半球）—— H = 2R + L → L = H - 2R。
+const DRAGON1_BODY_LENGTH: f32 = UNIT_BODY_HEIGHT - 2.0 * DRAGON1_BODY_RADIUS;
 
 /// sprite 贴片的像素尺寸。
 ///
@@ -48,10 +55,13 @@ const DRAGON1_SPRITE_WIDTH: f32 = DRAGON1_SPRITE_PIXELS_WIDTH / PIXELS_PER_METER
 const DRAGON1_SPRITE_HEIGHT: f32 = DRAGON1_SPRITE_PIXELS_HEIGHT / PIXELS_PER_METER;
 /// sprite 子实体相对父实体的 Y 偏移（米）—— 让 sprite 的"脚"贴地面。
 ///
-/// 推导同 [`player`](super::player) 的 `PLAYER_SPRITE_OFFSET_Y`：
-/// 父 entity 落地后中心在 `y = collider_size / 2`，sprite mesh 中心应在
-/// `y = sprite_height / 2`，所以偏移 = `(sprite_height - collider_size) / 2`。
-const DRAGON1_SPRITE_OFFSET_Y: f32 = (DRAGON1_SPRITE_HEIGHT - DRAGON1_COLLIDER_SIZE) * 0.5;
+/// 推导同 [`player`](super::player) 的 `PLAYER_SPRITE_OFFSET_Y`：父 entity
+/// 落地后中心在 `y = UNIT_BODY_HEIGHT / 2`（capsule 中心 = 总高一半），
+/// sprite mesh 中心应在 `y = sprite_height / 2`，所以偏移 =
+/// `(sprite_height - UNIT_BODY_HEIGHT) / 2`。
+///
+/// 当前 Dragon1 sprite 刚好 2m，与 [`UNIT_BODY_HEIGHT`] 对齐 → 偏移为 0。
+const DRAGON1_SPRITE_OFFSET_Y: f32 = (DRAGON1_SPRITE_HEIGHT - UNIT_BODY_HEIGHT) * 0.5;
 
 /// Dragon1 的预加载资产集合。
 ///
@@ -79,7 +89,7 @@ pub struct Dragon1Assets {
 /// `Unit` marker 和满血 `Health`，跟 [`Player`](super::player::Player)
 /// 用同一套机制。
 #[derive(Component, Debug, Default)]
-#[require(Unit, Health = Health::new(DRAGON1_MAX_HEALTH))]
+#[require(Unit, Body, Health = Health::new(DRAGON1_MAX_HEALTH))]
 pub struct Dragon1;
 
 /// Dragon1 插件 —— 注册 `AssetCollection`，触发 sprite 在 Loading state
@@ -134,11 +144,10 @@ pub fn spawn_dragon1(
             // 接入时可能改 Kinematic（自走逻辑驱动），现在跟 player 一样
             // 走完整物理通路验证。
             RigidBody::Dynamic,
-            Collider::cuboid(
-                DRAGON1_COLLIDER_SIZE,
-                DRAGON1_COLLIDER_SIZE,
-                DRAGON1_COLLIDER_SIZE,
-            ),
+            // capsule body，选型思路同 [`Player`](super::player::Player)。总高
+            // [`UNIT_BODY_HEIGHT`] 全场 ground unit 共享，不同 R 互推时纯 XZ
+            // 修正，Y 不抽。
+            Collider::capsule(DRAGON1_BODY_RADIUS, DRAGON1_BODY_LENGTH),
             LockedAxes::ROTATION_LOCKED,
             SleepingDisabled,
             TransformInterpolation,

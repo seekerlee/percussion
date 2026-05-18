@@ -19,13 +19,24 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
 
+use super::{Body, DamageMessage, Dead, Health, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
-use super::{DamageMessage, Dead, Health, Unit};
 
-/// 玩家物理盒边长（米）—— 跟视觉 sprite 尺寸独立。玩家踋在地面
-/// 上时，盒中心在 y=0.5（全尺寸 1m 立方体，半高 0.5）。
-const PLAYER_COLLIDER_SIZE: f32 = 1.0;
+/// 玩家物理 body 半径（米）。
+///
+/// body 是 capsule，**总高**由共享常量 [`UNIT_BODY_HEIGHT`] 决定，这
+/// 里只控制半径 = 顶视 XZ 上的推挤占位。必须 ≤ `UNIT_BODY_HEIGHT / 2`，
+/// 否则 [`PLAYER_BODY_LENGTH`] 会负（capsule 无解）。选 capsule 而不是
+/// sphere 是为了同享[`UNIT_BODY_HEIGHT`]的“并排接触法线纯水平”特性，
+/// 不同 R 的 unit 互推时 Y 不会抖动。
+///
+/// 玩家落地后父 entity 位于 `y = UNIT_BODY_HEIGHT / 2`（capsule 中心
+/// = 总高一半），与半径无关。
+const PLAYER_BODY_RADIUS: f32 = 0.4;
+/// capsule 的圆柱段长度（**不含**两端半球）—— avian `Collider::capsule`
+/// 第二个参数要的就是这个。推导：总高 H = 2R + L → L = H - 2R。
+const PLAYER_BODY_LENGTH: f32 = UNIT_BODY_HEIGHT - 2.0 * PLAYER_BODY_RADIUS;
 /// 玩家 sprite 贴片尺寸（像素）。
 ///
 /// 当前贴图是 128×64 单图：人物画在中间，左右两侧大片透明。透明像
@@ -40,9 +51,13 @@ const PLAYER_SPRITE_HEIGHT: f32 = PLAYER_SPRITE_PIXELS_HEIGHT / PIXELS_PER_METER
 /// sprite 子实体相对父实体的 Y 偏移（米）。
 ///
 /// 推导：让 sprite 的**脚**贴地面（y_world = 0）。玩家落地后父 entity
-/// 位于 y_world = collider_size / 2；sprite mesh 中心应在 y_world =
-/// sprite_height / 2。所以偏移 = sprite_height/2 - collider_size/2。
-const PLAYER_SPRITE_OFFSET_Y: f32 = (PLAYER_SPRITE_HEIGHT - PLAYER_COLLIDER_SIZE) * 0.5;
+/// 位于 `y_world = UNIT_BODY_HEIGHT / 2`（capsule 中心 = 总高一半）；
+/// sprite mesh 中心应在 `y_world = sprite_height / 2`。所以子实体本地
+/// Y = `(sprite_height - UNIT_BODY_HEIGHT) / 2`。
+///
+/// 当 sprite_height == UNIT_BODY_HEIGHT 时 offset = 0（当前 Player sprite
+/// 刚好 2m，与 [`UNIT_BODY_HEIGHT`] 对齐 → 偏移为 0）。
+const PLAYER_SPRITE_OFFSET_Y: f32 = (PLAYER_SPRITE_HEIGHT - UNIT_BODY_HEIGHT) * 0.5;
 /// 玩家平移速度（米/秒）。
 const PLAYER_SPEED: f32 = 5.0;
 /// 玩家初始最大生命值。数值是 prototype 阶段的占位，等战斗公式立起来再调。
@@ -78,7 +93,7 @@ pub struct PlayerAssets {
 /// 且无需手写的生命值初始为满血"。实现上是组合而非继承：组件都挂在
 /// 同一 entity 上。
 #[derive(Component, Debug, Default)]
-#[require(Unit, Health = Health::new(PLAYER_MAX_HEALTH))]
+#[require(Unit, Body, Health = Health::new(PLAYER_MAX_HEALTH))]
 pub struct Player;
 
 /// Player 插件 —— 注册键盘移动 system，以及 debug build 下的调试快捷键。
@@ -159,11 +174,10 @@ pub fn spawn_player(
             Transform::from_translation(local_pos),
             // Dynamic 刚体：靠重力落到地面，靠 stage 物理屏障挡 XZ 移动。
             RigidBody::Dynamic,
-            Collider::cuboid(
-                PLAYER_COLLIDER_SIZE,
-                PLAYER_COLLIDER_SIZE,
-                PLAYER_COLLIDER_SIZE,
-            ),
+            // capsule body：其他 unit 不同半径互推时接触点落在圆柱中段、
+            // 法线纯水平，Y 方向不抽。总高 [`UNIT_BODY_HEIGHT`] 为全场
+            // ground unit 共享，这里只需在调用点拼出 cylinder 段长度。
+            Collider::capsule(PLAYER_BODY_RADIUS, PLAYER_BODY_LENGTH),
             // 防止被撞翻滚 —— 俯视斜角游戏角色应保持站立。
             LockedAxes::ROTATION_LOCKED,
             // 禁用 sleeping：avian 默认会把静止的 Dynamic body 标记为 Sleeping

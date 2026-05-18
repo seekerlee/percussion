@@ -16,8 +16,13 @@
 //! - [`Dead`]：marker，标记 unit 处于"死亡状态"。**死 ≠ despawn** —— 死掉
 //!   的 entity 还在场上，可以被复活、播放死亡动画、留尸体；什么时候真
 //!   销毁是另一刀的事（"尸体清理"，目前没做）。
-//! - [`DamageMessage`] / [`UnitDiedMessage`]：受伤 / 死亡的消息总线
-//! - 两个 model-side system：[`apply_damage_messages`] + [`transition_to_dead`]
+//! - [`Body`]：marker，声明该 unit 类型"有 body"——参与物理推挤、互相
+//!   挡路。配合两个 lifecycle observer（[`disable_body_on_dead`] /
+//!   [`reenable_body_on_revive`]）让"尸体不挡路、复活恢复挡路"成为零
+//!   额外代码的默认行为。飞行 / 灵体单位**不带**这个 marker。//! - [`UNIT_BODY_HEIGHT`]：所有 ground unit 共享的 capsule body 总高度
+//!   常量，避免不同半径 unit 互推时 Y 方向抖动。//! - [`DamageMessage`] / [`UnitDiedMessage`]：受伤 / 死亡的消息总线
+//! - model-side system：[`apply_damage_messages`] + [`transition_to_dead`]
+//! - lifecycle observer：[`disable_body_on_dead`] + [`reenable_body_on_revive`]
 //!
 //! # 全局约定：`Without<Dead>` filter
 //!
@@ -34,6 +39,7 @@
 //! （倒地但可复活）这种中间态，互斥就需要靠 transition system 统一调度
 //! 或者改 enum，那时再说。
 
+use avian3d::prelude::*;
 use bevy::prelude::*;
 
 /// 标记一个 entity 是"角色"。玩家 / 敌人 / 佣兵 / 召唤物 / NPC 都带它。
@@ -81,6 +87,49 @@ impl Health {
 #[derive(Component, Debug, Default)]
 pub struct Dead;
 
+/// 所有 ground unit body 共享的**总高度**（米，含两端半球）。
+///
+/// 为什么共享：两个不同半径的 capsule 并排相撞，只要它们的总高一致，接
+/// 触点就会落在彼此的圆柱中段，接触法线 100% 水平 —— 物理求解器分配的
+/// 修正只走 XZ，Y 方向稳定。如果各 unit 自己选高度，矮 unit 顶端与高
+/// unit 圆柱段相碰时法线带 Y 分量，会出现"高 unit 被矮 unit 顶起来跳一
+/// 下再被重力压下来"的抖动。
+///
+/// 选 2.0m 是为了**跟当前 sprite 的 2m 高度对齐** —— sprite mesh 中心刚
+/// 好等于 body 中心，sprite offset 公式归零，少一个常量。物理含义上 2m
+/// 偏高（≈2.05m 人）但 top-down 视角下 Y 看不见，无 gameplay 影响。
+///
+/// 约束：使用此高度的 capsule，半径 R 必须 **≤ `UNIT_BODY_HEIGHT / 2`**
+/// （否则 `length = H - 2R < 0`，capsule 形状无解）。R 超界的"扁宽怪"
+/// 要换 shape 并自己处理 Y 推挤副作用，不走这条共享路径。
+pub const UNIT_BODY_HEIGHT: f32 = 2.0;
+
+/// 标记一个 unit "有 body"：在物理世界占体积、跟墙碰撞、跟其他带 body
+/// 的 unit 互相推挤。
+///
+/// 这是**存在性**标记 —— marker 在表示"该 unit 类型本来就有 body"；
+/// marker 缺席表示该 unit 永久无 body（如飞行单位、灵体单位），不应被
+/// `With<Body>` 的物理 / 索敌相关 system 当成实体障碍处理。
+///
+/// **临时关闭** body（如死后变尸体、被秒杀僵直）走另一条正交路径：往
+/// entity 上 insert [`ColliderDisabled`] + [`RigidBodyDisabled`]，avian 在
+/// broad-phase 直接跳过、不积分、不生成 contact pair。marker 不动，存在
+/// 性不变 —— 区分"永远没 body"和"暂时停用 body"。
+///
+/// 死亡 → 自动停用 body 的连线由本模块的 [`disable_body_on_dead`] /
+/// [`reenable_body_on_revive`] observer 处理；具体 unit 类型只需在自己
+/// 的 `#[require(...)]` 链里写上 `Body`、spawn 时手动挂 `Collider` 即可。
+///
+/// # 形状约定：capsule 同高
+///
+/// Ground unit 用 `Collider::capsule(BODY_RADIUS, UNIT_BODY_HEIGHT - 2.0 *
+/// BODY_RADIUS)` —— 共享 [`UNIT_BODY_HEIGHT`] 总高度，每个 unit 自定半径。
+/// 这样不同体型的 unit 互相推挤时 Y 方向不会抖动（见 [`UNIT_BODY_HEIGHT`]
+/// 文档的根因解释）。半径必须 ≤ `UNIT_BODY_HEIGHT / 2`，超出的 unit 要
+/// 走自己的 shape 路径。
+#[derive(Component, Debug, Default)]
+pub struct Body;
+
 /// 给 unit 造成伤害的消息 —— 任何"伤害源"（近战、投射物、debuff tick、
 /// 坠落等）都往这里写，[`apply_damage_messages`] 消费它来扣血。
 ///
@@ -119,7 +168,13 @@ impl Plugin for UnitPlugin {
             .add_message::<UnitDiedMessage>()
             // 顺序：先把所有伤害结算到 Health，再判定谁死了。
             // 否则同一帧"挨打致死"会被推迟一帧才进入 Dead 状态。
-            .add_systems(Update, (apply_damage_messages, transition_to_dead).chain());
+            .add_systems(Update, (apply_damage_messages, transition_to_dead).chain())
+            // 用 observer（而不是 `Added<Dead>` 的 schedule 内 query）是
+            // 为了**同帧响应** —— `transition_to_dead` 通过 Commands insert
+            // `Dead`，commands 在 schedule 边界才 flush；observer 在 flush
+            // 那一刻原生触发，不依赖 query 跨帧轮询。
+            .add_observer(disable_body_on_dead)
+            .add_observer(reenable_body_on_revive);
     }
 }
 
@@ -158,6 +213,54 @@ fn transition_to_dead(
     }
 }
 
+/// `Dead` 被挂上时，自动给带 [`Body`] 的 unit 停用物理：插入
+/// [`ColliderDisabled`] + [`RigidBodyDisabled`]，broad-phase 跳过、不积分。
+///
+/// 默认行为：尸体不挡路、不再被重力推、不再跟其他 unit 互推。如果将来
+/// 想做"尸体仍然挡路"的特定关卡机制，把这条 observer 从 plugin 里摘
+/// 掉，或在 unit 上加一个反向 marker 来跳过即可。
+///
+/// 没有 `Body` marker 的 unit（飞行 / 灵体）直接跳过 —— 它们本来就没
+/// body 物理，没什么可停的。
+fn disable_body_on_dead(
+    add: On<Add, Dead>,
+    q_body: Query<(), With<Body>>,
+    mut commands: Commands,
+) {
+    let entity = add.entity;
+    if !q_body.contains(entity) {
+        return;
+    }
+    // 用 `get_entity` 而不是 `entity()`：万一 entity 在同一帧被 despawn，
+    // 直接 `entity()` 会 panic；这里宁可静默忽略。
+    let Ok(mut ec) = commands.get_entity(entity) else {
+        return;
+    };
+    ec.insert((ColliderDisabled, RigidBodyDisabled));
+}
+
+/// `Dead` 被移除时（复活、debug 命令、关卡重置等），把 body 物理恢复
+/// —— 配对 [`disable_body_on_dead`]。
+///
+/// `On<Remove, Dead>` 也会在 entity 被 despawn 时触发（despawn 等同于
+/// 所有组件被移除）。此时 entity 已经/即将无效，`get_entity` 失败、
+/// `q_body.contains` 也是 false，整条 observer 走空，安全无副作用。
+fn reenable_body_on_revive(
+    remove: On<Remove, Dead>,
+    q_body: Query<(), With<Body>>,
+    mut commands: Commands,
+) {
+    let entity = remove.entity;
+    if !q_body.contains(entity) {
+        return;
+    }
+    let Ok(mut ec) = commands.get_entity(entity) else {
+        return;
+    };
+    // 用元组当 bundle 一次性 remove —— 顺序不重要，两个组件互不依赖。
+    ec.remove::<(ColliderDisabled, RigidBodyDisabled)>();
+}
+
 // ============================================================================
 // 子模块：具体的 unit 类型。每种角色（玩家、敌人、佣兵、NPC……）一个
 // 独立 module 文件，跟本文件提供的共享身份层（`Unit` / `Health` / `Dead`
@@ -167,4 +270,3 @@ fn transition_to_dead(
 
 pub mod dragon1;
 pub mod player;
-
