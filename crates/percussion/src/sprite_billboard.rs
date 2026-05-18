@@ -1,10 +1,10 @@
-//! Y 轴 billboard sprite —— 让 2D 贴片在 3D 场景里始终面对相机。
+//! Billboard sprite —— 让 2D 贴片在 3D 场景里始终正面对屏幕。
 //!
 //! # 这个模块解决什么问题
 //!
 //! 项目的视觉路线是 **3D 世界 + 2D billboard sprite**（饥荒 / Delver /
 //! The Last Night 都是这套）：相机以斜俯角看 3D 场景，但角色、道具、
-//! 特效都是平面 2D 贴图，靠每帧把贴图的 yaw 转向相机来"伪装"成立体。
+//! 特效都是平面 2D 贴图，靠每帧把贴图的姿态对齐相机来"伪装"成立体。
 //!
 //! 这个模块只管"朝向相机"这一件事 —— 不管贴图怎么挑、mesh 怎么建、
 //! material 怎么配。调用方 spawn 一个 [`Mesh3d`] + [`MeshMaterial3d`]
@@ -14,19 +14,30 @@
 //! 也都会用），不属于 unit / player / stage 任一具体领域，所以独立成
 //! 模块。
 //!
-//! # 为什么只绕 Y 轴
+//! # 用 full billboard（不是 Y 轴 billboard）
 //!
-//! 完整 billboard（同时绕 X 和 Y 跟随相机）在俯视斜角下会让 sprite
-//! 看起来"飘"—— 相机有 pitch，sprite 也跟着 pitch，像树倒了一样。
-//! 饥荒、Delver 都只绕 Y：sprite 保持垂直，只在水平面内转身追相机。
+//! 「**Y 轴 billboard**」只把 sprite 在水平面 yaw 转向相机，sprite 在 world
+//! 里始终垂直于地面。问题：透视相机 + 斜俯角下，**世界 +Y 不在 image
+//! plane 里**（因为相机有 pitch），所以"世界垂直"的 sprite 投影到屏幕
+//! 上时，离屏幕中心越远，越往中心顶部消失点倾斜 —— 视觉上"人没垂直
+//! 于地面"。这是透视投影的固有几何，sprite 本身没歪。
+//!
+//! 「**Full billboard**」让 sprite 的 plane 跟相机 image plane 完全平行：
+//! sprite world rotation **直接等于相机 world rotation**。等价于 sprite
+//! 局部三轴跟相机三轴对齐 —— 局部 +Z 朝相机、局部 +Y 朝相机的 image-up
+//! 方向、局部 +X 朝相机的 image-right。
+//!
+//! 屏幕上 sprite 永远是正立矩形（头朝屏幕正上方）。代价：sprite 在 world
+//! 里**斜着躺**，匹配相机 pitch + yaw —— 视觉上"脚"会偏离 sprite 局部
+//! 中心连线对应的 world 地面点（详见 [`face_camera`] 文档）。这个项目目前
+//! 不画 sprite 自身阴影、相机也不会做大幅 pitch 变化，偏移不显眼。
 //!
 //! # 对父旋转鲁棒
 //!
 //! Bevy 的 [`Transform`] 是**局部坐标**，sprite 的 world rotation =
 //! parent.world_rotation × sprite.local_rotation。如果直接给 local 写
-//! 一个纯 yaw（像旧版本那样调 [`Transform::look_to`]），只要父有任何
-//! pitch / roll，sprite 在 world 里就跟着歪 —— 视觉表现为"人没垂直
-//! 于地面"。
+//! 目标姿态（像旧版本那样调 [`Transform::look_to`]），只要父有任何旋转
+//! 漂移，sprite 在 world 里就跟着歪。
 //!
 //! 容易踩的坑：挂 sprite 的 unit 一般会带 [`avian3d::prelude::LockedAxes::ROTATION_LOCKED`]
 //! 防止被撞翻滚，**但 Avian 0.6 的这个 flag 只在每物理步把角速度三个
@@ -34,8 +45,8 @@
 //! 穿透推回、数值漂移都会给父 entity 加一点点旋转，几秒后累积成肉眼
 //! 可见的歪。
 //!
-//! 因此本 system 不假设父级旋转 —— 算出目标 **world rotation**（纯
-//! Y 轴 yaw），再反推该写到 local rotation 的值（见 [`face_camera_yaw`]）。
+//! 因此本 system 不假设父级旋转 —— 算出目标 **world rotation**（= 相机
+//! 的 world rotation），再反推该写到 local rotation 的值（见 [`face_camera`]）。
 
 use bevy::prelude::*;
 
@@ -50,8 +61,8 @@ use bevy::prelude::*;
 /// ```
 pub const PIXELS_PER_METER: f32 = 32.0;
 
-/// 标记一个 entity 是 Y 轴 billboard sprite，每帧由 [`face_camera_yaw`]
-/// 把 yaw 旋到对准相机。
+/// 标记一个 entity 是 billboard sprite，每帧由 [`face_camera`] 把姿态
+/// 对齐到相机的 image plane（full billboard，见模块顶部 doc）。
 ///
 /// 这个组件本身**不渲染任何东西** —— 通常跟 [`Mesh3d`] + [`MeshMaterial3d`]
 /// 一起挂在同一 entity 上：mesh 用 [`Rectangle::new(w, h)`] 当贴片（默认
@@ -72,19 +83,23 @@ impl Plugin for BillboardPlugin {
     fn build(&self, app: &mut App) {
         // 放 PostUpdate：让 sprite 在 Update 阶段所有改 Transform 的逻辑
         // system 之后再朝向相机，避免被同帧其他系统覆盖。
-        app.add_systems(PostUpdate, face_camera_yaw);
+        app.add_systems(PostUpdate, face_camera);
     }
 }
 
-/// 每帧把所有 [`BillboardSprite`] 的 yaw 旋到水平指向相机。
+/// 每帧把所有 [`BillboardSprite`] 的姿态对齐到相机 image plane（full
+/// billboard）。
 ///
 /// # 算法
 ///
-/// 1. 算"sprite → 相机"的水平向量（抹掉 Y）；
-/// 2. 用 [`f32::atan2`] 取这个向量在 XZ 平面上的角度，作为目标 yaw；
-/// 3. 目标 **world rotation** = [`Quat::from_rotation_y`]（绝对纯 Y 轴旋转，
-///    跟父级状态无关）；
-/// 4. 反推 local rotation —— 见模块顶部"对父旋转鲁棒"。
+/// 目标 **world rotation** 直接等于相机的 world rotation —— sprite 局部
+/// 三轴跟相机三轴一一对齐：
+///
+/// - sprite 局部 +Z → 相机 +Z（朝相机背后方向）→ sprite 正面贴图对着相机
+/// - sprite 局部 +Y → 相机 +Y（image-up）→ sprite 的"头"投影成屏幕正上
+/// - sprite 局部 +X → 相机 +X（image-right）
+///
+/// 然后反推 local rotation —— 见模块顶部"对父旋转鲁棒"。
 ///
 /// # 反推 local rotation 的代数
 ///
@@ -100,36 +115,35 @@ impl Plugin for BillboardPlugin {
 /// 反推出 parent world rotation，不必再 query 父 entity。落后一帧的代价
 /// 是父旋转漂移那一丁点；俯视斜角下完全看不出来。
 ///
+/// # 已知视觉代价："脚"漂移
+///
+/// sprite 在 world 里斜着躺（匹配相机 pitch + yaw），所以 sprite 局部
+/// (0, -h/2, 0) 这个视觉"脚"点在 world 里 = sprite_center - (h/2) × camera_up。
+/// 跟 sprite_center 正下方的地面点不重合 —— 视觉上"脚"会比物理 collider
+/// 位置往相机方向偏 sin(pitch) × (h/2)、垂直方向沉 cos(pitch) × (h/2) - h/2。
+///
+/// 当前不画 sprite 自身阴影、release 相机 pitch 固定 = 45°，偏移肉眼
+/// 不太察觉。如果以后要做"脚踩地面特效"或自身阴影对齐，再加一层 local
+/// translation 补偿（每帧按 camera_up 反向平移 h/2）。
+///
 /// # 假设
 ///
 /// - **单相机**：场景里没有 [`Camera3d`] 或有多个则整帧静默跳过；多相机
 ///   分屏那天再扩展。
 /// - **Rectangle mesh 正面是 +Z**：sprite 的正面贴图朝向局部 +Z 轴。
-fn face_camera_yaw(
+fn face_camera(
     cameras: Query<&GlobalTransform, (With<Camera3d>, Without<BillboardSprite>)>,
     mut sprites: Query<(&mut Transform, &GlobalTransform), With<BillboardSprite>>,
 ) {
     let Ok(camera_xform) = cameras.single() else {
         return;
     };
-    let cam_pos = camera_xform.translation();
+
+    // 目标 world rotation：sprite 三轴 = 相机三轴。
+    // 拿一次就够 —— 所有 sprite 共用同一个目标。
+    let desired_world_rot = camera_xform.rotation();
 
     for (mut transform, sprite_global) in &mut sprites {
-        let delta = cam_pos - sprite_global.translation();
-        let flat_to_cam = Vec3::new(delta.x, 0.0, delta.z);
-
-        if flat_to_cam.length_squared() < 1e-6 {
-            // 相机几乎正好在 sprite 正上方，水平朝向退化为不定 —— 保留
-            // 上一帧 rotation，避免突变。俯视斜角下不会真碰到这个分支。
-            continue;
-        }
-
-        // 目标 world rotation：纯 Y 轴 yaw，让局部 +Z 在水平面内指向相机。
-        // 绕 +Y 转 θ 后：+Z = (0,0,1) → (sin θ, 0, cos θ)，匹配 flat_to_cam 方向
-        // 要求 sin θ = flat.x / |flat|、cos θ = flat.z / |flat| → θ = atan2(flat.x, flat.z)。
-        let yaw = flat_to_cam.x.atan2(flat_to_cam.z);
-        let desired_world_rot = Quat::from_rotation_y(yaw);
-
         // 反推 local rotation（见 doc 注释里的代数推导）。
         // 注意：sprite_global 是上一帧 transform 传播的产物，与 transform.rotation
         // 当前值组合即可还原父 world rotation；这正是我们需要的。
