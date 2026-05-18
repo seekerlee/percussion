@@ -23,7 +23,7 @@ use bevy::prelude::*;
 /// 网格间距：1 单位（约 1 米）一条线。
 const GRID_STEP: f32 = 1.0;
 /// 网格半边长：以原点为中心 ±`GRID_EXTENT` 的方形覆盖。
-const GRID_EXTENT: f32 = 20.0;
+const GRID_EXTENT: f32 = 100.0;
 
 /// 网格 + 三轴可视化插件。
 pub struct GridPlugin;
