@@ -108,6 +108,23 @@ impl Plugin for GamePlugin {
             dev::camera::CameraPlugin,
             dev::inspector::InspectorPlugin,
         ));
+
+        // FPS overlay 来自 `bevy::dev_tools`，由 cargo feature `dev` 拉起
+        // （`bevy/bevy_dev_tools`）。语义上跟上面那块同属 dev 工具，但
+        // 编译可见性绑的是 cargo feature 而不是 `debug_assertions`，所以
+        // 单独 gate，平铺写出来不藏在嵌套 cfg 里。
+        //
+        // 只显示 FPS 数字，关掉默认开启的帧时间折线图。
+        #[cfg(feature = "dev")]
+        app.add_plugins(bevy::dev_tools::fps_overlay::FpsOverlayPlugin {
+            config: bevy::dev_tools::fps_overlay::FpsOverlayConfig {
+                frame_time_graph_config: bevy::dev_tools::fps_overlay::FrameTimeGraphConfig {
+                    enabled: false,
+                    ..default()
+                },
+                ..default()
+            },
+        });
     }
 }
 
