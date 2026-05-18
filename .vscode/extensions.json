@@ -6,6 +6,7 @@
         "vadimcn.vscode-lldb",
         "ms-vscode.cpptools",
         "fill-labs.dependi",
-        "usernamehw.errorlens"
+        "usernamehw.errorlens",
+        "spencerwmiles.vscode-task-buttons"
     ]
 }

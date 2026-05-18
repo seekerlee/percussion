@@ -1,16 +1,46 @@
 {
-    // Requires the "CodeLLDB" extension (vadimcn.vscode-lldb).
+    // Two debuggers available:
+    //   - cppvsdbg: Microsoft Visual Studio Debugger (ms-vscode.cpptools).
+    //     Native handler for Windows PE/PDB; recommended for Bevy projects
+    //     on Windows because CodeLLDB has architectural perf issues on
+    //     large dependency forests (see CodeLLDB issue #1241).
+    //   - lldb: CodeLLDB (vadimcn.vscode-lldb). Kept as fallback / for
+    //     unit-test debugging where it works fine.
     //
-    // The dev config uses a preLaunchTask to stage runtime DLLs next to the
-    // exe (because `bevy/dynamic_linking` makes the exe depend on two DLLs
-    // that aren't on PATH when a debugger launches it directly). Release
-    // and unit-test configs don't enable dynamic_linking, so they can use
-    // CodeLLDB's `cargo` block directly. Full reasoning lives in
-    // `.github/copilot-instructions.md`.
+    // The dev configs use a preLaunchTask to stage runtime DLLs next to
+    // the exe (because `bevy/dynamic_linking` makes the exe depend on two
+    // DLLs that aren't on PATH when a debugger launches it directly).
+    // Release doesn't enable dynamic_linking so it just needs cargo build.
+    // Unit-test config still uses CodeLLDB's `cargo` block (cppvsdbg has no
+    // equivalent for "build tests then debug the produced binary").
+    // Full reasoning lives in `.github/copilot-instructions.md`.
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug 'percussion' (dev)",
+            "name": "Debug 'percussion' (dev, cppvsdbg)",
+            // 用微软 C/C++ 扩展自带的 Visual Studio Debugger。Rust msvc target
+            // 输出 Microsoft PDB，cppvsdbg 是它的"亲生"调试器，对 Windows
+            // PE/PDB 处理远比 CodeLLDB (LLDB on Windows) 高效。CodeLLDB 在
+            // Bevy 这种大依赖项目上 lldb.exe 持续高 CPU、窗口卡死，issue
+            // #1241 vadimcn 本人承认是 LLDB 架构层问题、扩展无法修。
+            // 前置：装 ms-vscode.cpptools (Microsoft C/C++) 扩展。
+            // 注意：environment 是数组形式，跟 lldb 的 env dict 不一样。
+            "type": "cppvsdbg",
+            "request": "launch",
+            "preLaunchTask": "dev: build & stage DLLs",
+            "program": "${workspaceFolder}/target/debug/percussion.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "environment": [
+                {
+                    "name": "_NO_DEBUG_HEAP",
+                    "value": "1"
+                }
+            ]
+        },
+        {
+            "name": "Debug 'percussion' (dev, lldb)",
             "type": "lldb",
             "request": "launch",
             "preLaunchTask": "dev: build & stage DLLs",
@@ -28,7 +58,34 @@
             }
         },
         {
-            "name": "Debug 'percussion' (release)",
+            "name": "Debug 'percussion' (release, cppvsdbg)",
+            // Release 模式下 `AssetPlugin::file_path = "assets"` 是相对 base
+            // 的子路径，base 由 Bevy 的 get_base_path() 决定：未设
+            // BEVY_ASSET_ROOT 时回落到 current_exe().parent()，也就是
+            // target/release/，于是 Bevy 会去找不存在的 target/release/assets/。
+            // 生产部署时 exe 旁边会有 assets/，没问题；本地 F5 调试时通过
+            // BEVY_ASSET_ROOT 强制 base 指向 workspace 根，让 base + "assets"
+            // 解析到 workspace 的 assets/。只影响调试器启动，不影响 ship 产物。
+            "type": "cppvsdbg",
+            "request": "launch",
+            "preLaunchTask": "cargo: build (release)",
+            "program": "${workspaceFolder}/target/release/percussion.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "environment": [
+                {
+                    "name": "_NO_DEBUG_HEAP",
+                    "value": "1"
+                },
+                {
+                    "name": "BEVY_ASSET_ROOT",
+                    "value": "${workspaceFolder}"
+                }
+            ]
+        },
+        {
+            "name": "Debug 'percussion' (release, lldb)",
             "type": "lldb",
             "request": "launch",
             "cargo": {
@@ -44,7 +101,10 @@
                 }
             },
             "args": [],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "BEVY_ASSET_ROOT": "${workspaceFolder}"
+            }
         },
         {
             "name": "Debug unit tests in 'percussion'",

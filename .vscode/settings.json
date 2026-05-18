@@ -58,5 +58,48 @@
     "search.exclude": {
         "**/target": true,
         "**/Cargo.lock": true
-    }
+    },
+    // ---------- 状态栏快捷按钮 (spencerwmiles.vscode-task-buttons) ----------
+    // 把最常点的 task 钉在状态栏，避免每次 Ctrl+Shift+P → "Run Task"。
+    // `task` 字段必须严格匹配 tasks.json 里的 label。icon 用 VS Code 内置
+    // codicon，列表见 https://code.visualstudio.com/api/references/icons-in-labels
+    "VsCodeTaskButtons.showCounter": false,
+    "VsCodeTaskButtons.tasks": [
+        {
+            "label": "$(play) Run",
+            "task": "cargo: run (dev, dynamic linking)",
+            "tooltip": "cargo run --features dev"
+        },
+        {
+            "label": "$(tools) Tasks",
+            "tooltip": "其他常用 cargo task",
+            "tasks": [
+                {
+                    "label": "$(checklist) Clippy (deny warnings)",
+                    "task": "cargo: clippy (deny warnings)",
+                    "description": "cargo clippy --workspace --all-targets -- -D warnings"
+                },
+                {
+                    "label": "$(beaker) Test",
+                    "task": "cargo: test (workspace)",
+                    "description": "cargo test --workspace"
+                },
+                {
+                    "label": "$(symbol-keyword) Fmt",
+                    "task": "cargo: fmt",
+                    "description": "cargo fmt --all"
+                },
+                {
+                    "label": "$(rocket) Run (release)",
+                    "task": "cargo: run (release)",
+                    "description": "cargo run --release"
+                },
+                {
+                    "label": "$(package) Build (release)",
+                    "task": "cargo: build (release)",
+                    "description": "cargo build --release"
+                }
+            ]
+        }
+    ]
 }
