@@ -39,7 +39,7 @@ use bevy::prelude::*;
 /// 标记一个 entity 是"角色"。玩家 / 敌人 / 佣兵 / 召唤物 / NPC 都带它。
 ///
 /// 实现 [`Default`] 是为了配合 `#[require(Unit)]` —— 让上层的 marker
-/// （如 [`Player`](crate::player::Player)）可以声明"我必然也是 Unit"，
+/// （如 [`Player`](crate::unit::player::Player)）可以声明“我必然也是 Unit”，
 /// spawn 时自动补这个 marker。
 #[derive(Component, Debug, Default)]
 pub struct Unit;
@@ -157,3 +157,14 @@ fn transition_to_dead(
         }
     }
 }
+
+// ============================================================================
+// 子模块：具体的 unit 类型。每种角色（玩家、敌人、佣兵、NPC……）一个
+// 独立 module 文件，跟本文件提供的共享身份层（`Unit` / `Health` / `Dead`
+// / 伤害消息总线）解耦。新加角色只在 `unit/` 目录里加一个文件并在这里
+// 声明即可。
+// ============================================================================
+
+pub mod dragon1;
+pub mod player;
+

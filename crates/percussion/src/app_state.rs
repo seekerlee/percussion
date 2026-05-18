@@ -21,7 +21,7 @@
 //!
 //! 这里**只管状态机本身**：定义 state 枚举、注册 LoadingState、声明加载
 //! 完成后跳到哪个 state。**不知道**有哪些具体 asset、不 spawn 任何 entity。
-//! 各领域 plugin（如 [`crate::player::PlayerPlugin`]）通过
+//! 各领域 plugin（如 [`crate::unit::player::PlayerPlugin`]）通过
 //! [`bevy_asset_loader::loading_state::config::ConfigureLoadingState::configure_loading_state`]
 //! 把自家 `AssetCollection` 挂到这个 LoadingState 上，实现"加载列表分布
 //! 在各模块里、状态机集中"的职责分离。

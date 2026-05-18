@@ -12,7 +12,7 @@
 //!
 //! Stage 内的几何（地面、视觉罩、物理屏障）由 [`spawn_stage`] 直接作为
 //! children spawn。后续的角色 / 子弹由外部模块（如
-//! [`crate::player::spawn_player`]）通过 `ChildOf(stage_entity)` 挂进来。
+//! [`crate::unit::player::spawn_player`]）通过 `ChildOf(stage_entity)` 挂进来。
 //! Despawn 这个 root 会通过 Bevy 0.18 relationship API 自动连带销毁所有
 //! children。
 //!
@@ -100,7 +100,7 @@ const BARRIER_THICKNESS: f32 = 0.5;
 ///
 /// - 决定"开局 spawn 哪个 stage / 多大 / 在哪"（由 `GamePlugin` 的
 ///   startup 决定 —— 这是游戏 policy，不是 stage 能力）
-/// - 在 stage 里放角色（玩家由 [`crate::player`] 管，敌人 / NPC 由
+/// - 在 stage 里放角色（玩家由 [`crate::unit::player`] 管，敌人 / NPC 由
 ///   各自模块管，stage 只提供"空舞台"）
 /// - 相机摆位（由 `lib.rs` 的 `spawn_camera` 管）
 /// - 灯光（由 `lib.rs` 管，跟相机同层级 —— 渲染前置条件）
@@ -123,7 +123,7 @@ impl Plugin for StagePlugin {
 ///
 /// 角色（玩家 / NPC / 敌人）不在这里 spawn —— 它们是独立的演员，
 /// 由调用方拿到返回的 stage entity 后，用各自模块的 spawn 函数
-/// （如 [`crate::player::spawn_player`]）挂进来。
+/// （如 [`crate::unit::player::spawn_player`]）挂进来。
 ///
 /// # 参数
 ///

@@ -21,7 +21,7 @@ use bevy_asset_loader::prelude::*;
 
 use crate::app_state::AppState;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
-use crate::unit::{DamageMessage, Dead, Health, Unit};
+use super::{DamageMessage, Dead, Health, Unit};
 
 /// 玩家物理盒边长（米）—— 跟视觉 sprite 尺寸独立。玩家踋在地面
 /// 上时，盒中心在 y=0.5（全尺寸 1m 立方体，半高 0.5）。

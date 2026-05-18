@@ -19,10 +19,10 @@ resolution: (1280u32, 720u32).into(),
 
 ### Bevy 找 `assets/` 的目录不是 CWD —— multi-crate workspace + F5 调试双重背刺
 
-**症状**：`AssetServer` 报 `ERROR Path not found: <somewhere>\assets\<file>`。CWD 明明对，文件也确实在 `<project>/assets/<file>`，但 Bevy 找的"somewhere"不是 workspace root。常见两个错位：
+**症状**：`AssetServer` 报 `ERROR Path not found: <somewhere>\assets\<file>`。CWD 明明对，文件也确实存在，但 Bevy 找的"somewhere"不是 CWD。常见错位：
 
-- F5 / LLDB 调试启动：`<project>/target/debug/assets/<file>`
-- `cargo run` 启动 multi-crate workspace 的 bin：`<project>/crates/<bin>/assets/<file>`
+- F5 / LLDB 调试启动：`<project>/target/<profile>/assets/<file>`
+- `cargo run` / `cargo run --release` 启动 multi-crate workspace 的 bin：`<project>/crates/<bin>/assets/<file>`
 
 **原因**：Bevy 0.18 `bevy_asset` 的 base path 优先级（`bevy_asset/src/io/file/mod.rs::get_base_path`）：
 
@@ -32,45 +32,33 @@ resolution: (1280u32, 720u32).into(),
 
 它**不看 CWD**。然后跟 `AssetPlugin::file_path`（默认 `"assets"`）join。所以：
 
-- `cargo run` 时 cargo 注入 `CARGO_MANIFEST_DIR` = 当前 package 的 manifest 目录。multi-crate workspace 里二进制 crate 在 `crates/<name>/`，于是 Bevy 找 `crates/<name>/assets/`。
-- F5 / LLDB 直接 spawn exe，不经过 cargo，`CARGO_MANIFEST_DIR` 没设，fallback 到 exe 旁边 = `target/debug/assets/`。
+- `cargo run` / `cargo run --release` 时 cargo 注入 `CARGO_MANIFEST_DIR` = 当前 package 的 manifest 目录。multi-crate workspace 里二进制 crate 在 `crates/<name>/`，于是 Bevy 找 `crates/<name>/assets/`。
+- F5 / LLDB 直接 spawn exe，不经过 cargo，`CARGO_MANIFEST_DIR` 没设，fallback 到 exe 旁边 = `target/<profile>/assets/`。
 
-把 `assets/` 放在 workspace root 的项目，两个场景**都**找不到。
+**修复**：跟 Bevy 默认行为对齐 —— 把 `assets/` 放在 bin crate 根下（即 `crates/percussion/assets/`），代码里**不**自定义 `AssetPlugin::file_path`。
 
-**修复**：在代码里设 `AssetPlugin::file_path`，不要碰 env vars。
+| 启动方式 | base path | `+ "assets"` | 结果 |
+|---|---|---|---|
+| `cargo run` (dev / release) | `crates/percussion/` | `crates/percussion/assets/` | ✅ |
+| F5 / LLDB | `target/<profile>/` → 用 env 改成 `crates/percussion/` | `crates/percussion/assets/` | ✅ |
+| dist 部署 exe | exe 旁边 | `<exe_dir>/assets/` | ✅ |
 
-观察到两种 dev 启动方式的 `base_path` 都恰好比 workspace root 深两级：
+F5 / LLDB 那条用 `.vscode/launch.json` 里的 env 把 base 强制指回 bin crate 根：
 
-| 启动方式 | `base_path` |
-|---|---|
-| `cargo run` | `<workspace_root>/crates/<bin>/` |
-| LLDB / F5 | `<workspace_root>/target/debug/` |
-
-所以 `file_path = "../../assets"` 在两种情况下 join 后都指向 `<workspace_root>/assets/`。release 部署惯例是 `assets/` 跟 exe 同目录，走默认 `"assets"`。
-
-```rust
-DefaultPlugins
-    .set(WindowPlugin { /* ... */ })
-    .set(AssetPlugin {
-        file_path: if cfg!(debug_assertions) {
-            "../../assets".to_string()
-        } else {
-            "assets".to_string()
-        },
-        ..default()
-    })
+```jsonc
+"env": {
+    "BEVY_ASSET_ROOT": "${workspaceFolder}/crates/percussion"
+}
 ```
 
-**为什么不走 `BEVY_ASSET_ROOT` env**：试过两条路都不靠谱。
+只有调试器配置吃这个 env，CLI 走 cargo 不受影响，部署后的 exe 也读不到（cargo 没参与启动），不污染。
 
-- `.cargo/config.toml [env] BEVY_ASSET_ROOT = { value = "..", relative = true }`：理论上 `relative=true` 应把 value 当作"相对 config.toml 所在目录"展开成绝对路径再 export。实测 cargo 拼出来是 `D:\project\percussion\..`（多一级倒退），错位。原因不明 —— 可能是 cargo 在 Windows 上 canonicalize 的 bug 或文档理解偏差，不要再花时间。
-- `.vscode/launch.json` 的 `env: { "BEVY_ASSET_ROOT": "${workspaceFolder}" }`：只对 F5 一条配置生效，`cargo run` 走不到。两处都设又得维护两份。
-- env 方案还会污染 release 部署：`BEVY_ASSET_ROOT` 一旦在 dev 期写进 shell / 用户环境，发布后的 exe 也会读，按 dev 期的绝对路径找文件，破坏可移植性。`AssetPlugin::file_path` 方案是代码层决策，不外泄。
+**走过的弯路**（别再踩）：
 
-**这套方案的依赖**：
+- ❌ `AssetPlugin::file_path = "../../assets"` + `cfg(debug_assertions)`：依赖"两种 dev 启动方式 base path 恰好都比 workspace root 深两级"的巧合。`cargo run --release` 一来就翻 ——`--release` 关掉 `debug_assertions` 走 release 分支 `"assets"`，base 还是 `crates/percussion/`，依然找不到。给 release 分支加 `../../assets` 又会污染 dist 部署。
+- ❌ `cargo run --release --features dev` 试图保住 `debug_assertions`：feature 不会改 profile 的 `debug-assertions` 设置，这条 workaround 不成立。
+- ❌ `.cargo/config.toml` 里 `BEVY_ASSET_ROOT = { value = "..", relative = true }`：值是相对 config.toml 所在目录（workspace root）展开的，写 `".."` 会跑到 workspace **外**。正确写法是 `"."`，但既然现在 assets 在 bin crate 里，根本不需要这条 env。
 
-- 它依赖"两种启动方式 base_path 都比 workspace root 深两级"的巧合。如果以后挪 binary crate 到 `crates/foo/bar/` 多嵌一层，或者 assets/ 不在 workspace root，要重新算 `"../.."` 的层数。
-- `cargo run --release` 仍然会走 `crates/<bin>/` 这条 base path（cargo 不管 profile，照样 set `CARGO_MANIFEST_DIR`），所以 `cfg(debug_assertions)` 不开时它会失败。想跑 release profile 测性能，**用 `cargo run --release --features dev`** 让 `debug_assertions` 仍为 true；或者临时手动设 env。这是个已知妥协。
 
 ## Windows 构建 / 调试
 

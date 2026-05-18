@@ -40,7 +40,7 @@ use std::f32::consts::FRAC_PI_4;
 /// release 构建里的相机姿态。
 const INITIAL_PITCH: f32 = FRAC_PI_4;
 /// 相机到 focus 的初始距离（米），对齐 `lib.rs::CAMERA_DISTANCE`。
-const INITIAL_RADIUS: f32 = 12.0;
+const INITIAL_RADIUS: f32 = 18.0;
 /// WASD pan 速度（米 / 秒）。
 const PAN_SPEED: f32 = 8.0;
 

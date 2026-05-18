@@ -36,6 +36,14 @@
                 {
                     "name": "_NO_DEBUG_HEAP",
                     "value": "1"
+                },
+                {
+                    // F5/LLDB 直拉 exe 不走 cargo，没有 CARGO_MANIFEST_DIR；
+                    // Bevy 会 fallback 到 exe 旁边（target/debug/），找不到
+                    // assets。这里强制把 base 指回 bin crate 根，跟 cargo run
+                    // 表现一致。详见 doc/gotchas.md。
+                    "name": "BEVY_ASSET_ROOT",
+                    "value": "${workspaceFolder}/crates/percussion"
                 }
             ]
         },
@@ -53,19 +61,19 @@
             // 时帧时间从微秒级飙到秒级，窗口直接卡死）。下划线开头的环境变量是
             // Windows 进程级开关，CodeLLDB 在 spawn 子进程前注入即可生效。
             // 关闭它只影响 debug heap，不影响 LLDB 自身的断点 / 内存检查能力。
+            //
+            // BEVY_ASSET_ROOT：跟 cppvsdbg 一份的理由，见上面那条注释。
             "env": {
-                "_NO_DEBUG_HEAP": "1"
+                "_NO_DEBUG_HEAP": "1",
+                "BEVY_ASSET_ROOT": "${workspaceFolder}/crates/percussion"
             }
         },
         {
             "name": "Debug 'percussion' (release, cppvsdbg)",
-            // Release 模式下 `AssetPlugin::file_path = "assets"` 是相对 base
-            // 的子路径，base 由 Bevy 的 get_base_path() 决定：未设
-            // BEVY_ASSET_ROOT 时回落到 current_exe().parent()，也就是
-            // target/release/，于是 Bevy 会去找不存在的 target/release/assets/。
-            // 生产部署时 exe 旁边会有 assets/，没问题；本地 F5 调试时通过
-            // BEVY_ASSET_ROOT 强制 base 指向 workspace 根，让 base + "assets"
-            // 解析到 workspace 的 assets/。只影响调试器启动，不影响 ship 产物。
+            // F5 直拉 exe 时 base = current_exe().parent() = target/release/，
+            // 找不到 assets。BEVY_ASSET_ROOT 把 base 指向 bin crate 根，让
+            // base + "assets" 解析到 crates/percussion/assets/。只影响调试
+            // 启动，dist 部署时 exe 旁边带 assets/，不需要这个 env。
             "type": "cppvsdbg",
             "request": "launch",
             "preLaunchTask": "cargo: build (release)",
@@ -80,7 +88,7 @@
                 },
                 {
                     "name": "BEVY_ASSET_ROOT",
-                    "value": "${workspaceFolder}"
+                    "value": "${workspaceFolder}/crates/percussion"
                 }
             ]
         },
@@ -103,7 +111,7 @@
             "args": [],
             "cwd": "${workspaceFolder}",
             "env": {
-                "BEVY_ASSET_ROOT": "${workspaceFolder}"
+                "BEVY_ASSET_ROOT": "${workspaceFolder}/crates/percussion"
             }
         },
         {

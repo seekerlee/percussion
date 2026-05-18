@@ -22,7 +22,6 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 pub mod app_state;
-pub mod player;
 pub mod sprite_billboard;
 pub mod stage;
 pub mod unit;
@@ -36,8 +35,16 @@ mod dev;
 /// 相机俯视斜角（度）。具体最终值在 `doc/game-design.md` §17 待决，
 /// 暂用 45°（饥荒视角的大致区间）。
 const CAMERA_PITCH_DEG: f32 = 45.0;
+/// 相机垂直 FOV（度）。Bevy 默认 45°；改小 = 视角更窄 / 物体更大（更
+/// "长焦"）。30° 接近《饥荒》的轻度透视感，配合下方加大的
+/// `CAMERA_DISTANCE` 维持原可见范围。
+const CAMERA_FOV_DEG: f32 = 30.0;
 /// 相机到焦点（原点）的距离，决定可见范围。
-const CAMERA_DISTANCE: f32 = 12.0;
+///
+/// FOV 收窄到 30° 后，物体在画面里会放大约 1.5×（`tan(22.5°)/tan(15°)`），
+/// 所以把距离从 12 拉到 18 抵消，保持原本的覆盖面积。这两个常量是
+/// **一组**：单独改 FOV 或单独改距离都会改变可见范围。
+const CAMERA_DISTANCE: f32 = 18.0;
 
 /// Root plugin that wires the whole game together.
 ///
@@ -46,38 +53,21 @@ pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "Percussion".into(),
-                        resolution: (1280u32, 720u32).into(),
-                        ..default()
-                    }),
-                    ..default()
-                })
-                // Bevy 把 asset 文件 dir 拼成 `<base_path>/<file_path>`，
-                // 其中 base_path 优先取 `BEVY_ASSET_ROOT` env，否则取
-                // `CARGO_MANIFEST_DIR` env，否则取 exe 所在目录。
-                //
-                // 本项目 assets/ 在 workspace root，但：
-                // - `cargo run` 时 CARGO_MANIFEST_DIR = `crates/percussion/`
-                //   （binary crate 的 manifest 目录，不是 workspace root）
-                // - LLDB 直接拉 exe 时 base_path = `target/debug/`
-                //
-                // 两种 dev 启动方式下 base_path 恰好都比 workspace root
-                // 深两级，所以 file_path 设 "../../assets" 在两种情况下都
-                // 指向 workspace root 的 assets/。release 部署假设 assets/
-                // 跟 exe 同目录，走默认 "assets"。
-                .set(AssetPlugin {
-                    file_path: if cfg!(debug_assertions) {
-                        "../../assets".to_string()
-                    } else {
-                        "assets".to_string()
-                    },
-                    ..default()
-                }),
-        )
+        // Asset 路径走 Bevy 默认：base = `CARGO_MANIFEST_DIR`（cargo run / build
+        // 时由 cargo 注入，指向本 bin crate 即 `crates/percussion/`）或
+        // `current_exe().parent()`（不经 cargo 时）。因此 `assets/` 必须
+        // 放在 bin crate 根下（`crates/percussion/assets/`），dist 部署时
+        // assets/ 跟 exe 同目录。F5 / LLDB 直拉 exe 时通过 launch.json 的
+        // `BEVY_ASSET_ROOT=${workspaceFolder}/crates/percussion` 把 base
+        // 强制指回 bin crate 根。详见 doc/gotchas.md。
+        app.add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Percussion".into(),
+                resolution: (1280u32, 720u32).into(),
+                ..default()
+            }),
+            ..default()
+        }))
         // 引擎层基础设施：物理在这里注册。Avian 不属于某个
         // 具体 plugin（stage / monster / bullet 都要用），放在最顶层避免
         // 重复注册和隐式 plugin 顺序依赖。
@@ -90,7 +80,8 @@ impl Plugin for GamePlugin {
             unit::UnitPlugin,
             sprite_billboard::BillboardPlugin,
             stage::StagePlugin,
-            player::PlayerPlugin,
+            unit::player::PlayerPlugin,
+            unit::dragon1::Dragon1Plugin,
         ))
         .add_systems(Startup, (spawn_camera, spawn_global_light))
         // 初始场景放到 `OnEnter(InGame)`：进到这个 state 时所有
@@ -106,7 +97,7 @@ impl Plugin for GamePlugin {
         app.add_plugins((
             dev::grid::GridPlugin,
             dev::camera::CameraPlugin,
-            dev::inspector::InspectorPlugin,
+            //dev::inspector::InspectorPlugin,
         ));
 
         // FPS overlay 来自 `bevy::dev_tools`，由 cargo feature `dev` 拉起
@@ -131,12 +122,20 @@ impl Plugin for GamePlugin {
 /// 俯视斜角 3D 相机：摆在 +Z 方向斜上方，看向原点。
 ///
 /// `pitch` = 绕水平轴向下倾斜的角度（0° = 水平看，90° = 完全俯视）。
+///
+/// `Projection` 显式插入而不是走 `Camera3d` 自动补默认值——默认 FOV 是
+/// 45°，本游戏想要 30°（见 `CAMERA_FOV_DEG` 注释）。其他字段（`near` /
+/// `far` / `aspect_ratio`）保留 Bevy 默认。
 fn spawn_camera(mut commands: Commands) {
     let pitch = CAMERA_PITCH_DEG.to_radians();
     let y = CAMERA_DISTANCE * pitch.sin();
     let z = CAMERA_DISTANCE * pitch.cos();
     commands.spawn((
         Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection {
+            fov: CAMERA_FOV_DEG.to_radians(),
+            ..default()
+        }),
         Transform::from_xyz(0.0, y, z).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
@@ -166,12 +165,13 @@ fn spawn_global_light(mut commands: Commands) {
 /// 所以归 `GamePlugin` 管。`StagePlugin` / `PlayerPlugin` 只提供 spawn API，
 /// 由谁、何时、何地、用什么尺寸调，是调用方的决策。
 ///
-/// 资产需求通过 [`player::PlayerAssets`] 资源注入：能走到这里说明
+/// 资产需求通过 [`unit::player::PlayerAssets`] 资源注入：能走到这里说明
 /// `LoadingState` 已经把所有 `AssetCollection` 填好并 insert 为 Resource，
 /// 不需要再绕道 `AssetServer` 手工 `load(...)`。
 fn spawn_initial_scene(
     mut commands: Commands,
-    player_assets: Res<player::PlayerAssets>,
+    player_assets: Res<unit::player::PlayerAssets>,
+    dragon1_assets: Res<unit::dragon1::Dragon1Assets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -192,12 +192,23 @@ fn spawn_initial_scene(
 
     // 玩家在 stage 中央上方 5 米处生成，靠重力落下 —— 可以用肉眼验证
     // 物理接触、撞 bounds 屏障的反馈都正常工作。
-    player::spawn_player(
+    unit::player::spawn_player(
         &mut commands,
         &player_assets,
         &mut meshes,
         &mut materials,
         stage_entity,
         Vec3::new(0.0, 5.0, 0.0),
+    );
+
+    // Dragon1 占位 —— 在玩家旁边落下，验证 sprite 加载 + Unit 共享通路。
+    // 之后接 AI 时这个 spawn 调用会被 wave / spawner 系统替代。
+    unit::dragon1::spawn_dragon1(
+        &mut commands,
+        &dragon1_assets,
+        &mut meshes,
+        &mut materials,
+        stage_entity,
+        Vec3::new(3.0, 5.0, 0.0),
     );
 }
