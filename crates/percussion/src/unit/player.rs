@@ -19,6 +19,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
 
+use super::movement::MoveVelocity;
 use super::{Body, DamageMessage, Dead, Health, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
@@ -172,25 +173,19 @@ pub fn spawn_player(
         .spawn((
             Player,
             Transform::from_translation(local_pos),
-            // Dynamic 刚体：靠重力落到地面，靠 stage 物理屏障挡 XZ 移动。
-            RigidBody::Dynamic,
+            // Kinematic 刚体：position / velocity / 重力 全部由游戏代码接管
+            // （见 `unit/movement.rs` 顶部文档）。走动不是被 solver
+            // 推出来的，是每帧 sweep-and-slide 主动推出来的 —— 互相挡却
+            // 互不推动，适合 top-down ARPG 的 go-stop 手感。
+            RigidBody::Kinematic,
             // capsule body：其他 unit 不同半径互推时接触点落在圆柱中段、
             // 法线纯水平，Y 方向不抽。总高 [`UNIT_BODY_HEIGHT`] 为全场
             // ground unit 共享，这里只需在调用点拼出 cylinder 段长度。
             Collider::capsule(PLAYER_BODY_RADIUS, PLAYER_BODY_LENGTH),
-            // 防止被撞翻滚 —— 俯视斜角游戏角色应保持站立。
+            // 防止被撞翻滚 —— 俯视斜角游戏角色应保持站立。不锁
+            // 转动会被击飞 / 撞压之类的接触带动。Kinematic 下其实
+            // solver 不会主动转动我们，但保留表达意图。
             LockedAxes::ROTATION_LOCKED,
-            // 禁用 sleeping：avian 默认会把静止的 Dynamic body 标记为 Sleeping
-            // 跳过积分省 CPU，但代价是被重新唤醒时位移会延迟 1-2 物理 tick，
-            // 表现为"按方向键先顿一下才动"。player 这种随时被输入驱动的实
-            // 体本来就不应该睡，多一次空积分相比手感损失完全划算。
-            SleepingDisabled,
-            // 帮 avian 在两个物理 tick 之间平滑插值 Transform：物理 64Hz
-            // 跑，渲染 144Hz，默认 sync 下连续几帧会看到同一个 Transform
-            // （22/22/22/45/45/45 这种跳进），加这个后变成「按 overstep」平滑
-            // lerp，几乎消除可见顿温。需要物理驱动位移才生效，所以
-            // `player_movement` 上面写 LinearVelocity 而不是直接改 Transform。
-            TransformInterpolation,
             // Bevy 0.18 relationship API：把自己挂成 parent_stage 的子实体。
             ChildOf(parent_stage),
         ))
@@ -209,12 +204,15 @@ pub fn spawn_player(
     player_entity
 }
 
-/// 方向键移动玩家：每帧根据按键设置 X/Z 方向线速度，Y 由重力管。
+/// 方向键移动玩家：每帧根据按键设置 X/Z 方向期望速度、写入 [`MoveVelocity`]，
+/// Y 留给 [`apply_gravity`](crate::unit::movement)。
 ///
-/// 为什么写速度而不是直接写 Transform：玩家挂了 `TransformInterpolation`，
-/// 物理 64Hz 跑、插值系统把渲染的 Transform 在两个物理 tick 之间平滑
-/// lerp。如果我们在 `Update` 里手写 Transform，插值状态会被识别为"外部改
-/// 动"而重置，等于白做；写速度让物理驱动 `Position`，插值才生效。
+/// 为什么写 [`MoveVelocity`] 而不是直接改 Transform：输入是"期望走多远"，
+/// 能不能走、能走多远由 sweep-and-slide 加上环境约束决定。玩家不应该直
+/// 接改 Position，否则会穿模、穿墙、跳过另一个 unit。
+///
+/// 为什么不写 avian 的 `LinearVelocity`：见 [`MoveVelocity`] 文档 ——
+/// 简言之，避免与 avian 位置集成器双重位移。
 ///
 /// 朝向约定：相机在 +Y +Z 看向原点（见 `lib.rs::spawn_camera`），所以屏幕
 /// 上"远端 = -Z"。WASD 留给 dev 相机（见 `dev_camera.rs`），玩家用方向键。
@@ -228,7 +226,7 @@ pub fn spawn_player(
 /// unit 不走移动逻辑，躺到原地。
 fn player_movement(
     keys: Res<ButtonInput<KeyCode>>,
-    mut q_player: Query<&mut LinearVelocity, (With<Player>, Without<Dead>)>,
+    mut q_player: Query<&mut MoveVelocity, (With<Player>, Without<Dead>)>,
 ) {
     let mut input = Vec2::ZERO;
     if keys.pressed(KeyCode::ArrowUp) {
@@ -250,9 +248,9 @@ fn player_movement(
     };
 
     for mut vel in &mut q_player {
-        // 只覆盖 X / Z；Y 留给重力，玩家会自然贴着地面。
-        vel.x = target_xz.x;
-        vel.z = target_xz.y;
+        // 只覆盖 X / Z；Y 留给重力 / 击飞 impulse 之类的其他来源。
+        vel.0.x = target_xz.x;
+        vel.0.z = target_xz.y;
     }
 }
 

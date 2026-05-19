@@ -78,6 +78,7 @@ impl Plugin for GamePlugin {
         .add_plugins(app_state::AppStatePlugin)
         .add_plugins((
             unit::UnitPlugin,
+            unit::movement::MovementPlugin,
             sprite_billboard::BillboardPlugin,
             stage::StagePlugin,
             unit::player::PlayerPlugin,

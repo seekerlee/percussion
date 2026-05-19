@@ -16,11 +16,16 @@
 //! - [`Dead`]：marker，标记 unit 处于"死亡状态"。**死 ≠ despawn** —— 死掉
 //!   的 entity 还在场上，可以被复活、播放死亡动画、留尸体；什么时候真
 //!   销毁是另一刀的事（"尸体清理"，目前没做）。
-//! - [`Body`]：marker，声明该 unit 类型"有 body"——参与物理推挤、互相
-//!   挡路。配合两个 lifecycle observer（[`disable_body_on_dead`] /
-//!   [`reenable_body_on_revive`]）让"尸体不挡路、复活恢复挡路"成为零
-//!   额外代码的默认行为。飞行 / 灵体单位**不带**这个 marker。//! - [`UNIT_BODY_HEIGHT`]：所有 ground unit 共享的 capsule body 总高度
-//!   常量，避免不同半径 unit 互推时 Y 方向抖动。//! - [`DamageMessage`] / [`UnitDiedMessage`]：受伤 / 死亡的消息总线
+//! - [`Body`]：marker，声明该 unit 类型"有 body"——参与挡路、不穿障碍物。
+//!   配合两个 lifecycle observer（[`disable_body_on_dead`] /
+//!   [`reenable_body_on_revive`]）让"尸体不挡路、复活恢复挡路"成为零额外
+//!   代码的默认行为。飞行 / 灵体单位**不带**这个 marker。
+//! - [`UNIT_BODY_HEIGHT`]：所有 ground unit 共享的 capsule body 总高度常量，
+//!   避免不同半径 unit 互推时 Y 方向抖动。
+//! - [`movement`]：Kinematic 移动子系统 —— sweep-and-slide + 重力 + 落地。
+//!   提供 [`MoveVelocity`](movement::MoveVelocity) 让"想往哪走"的来源（玩家
+//!   输入、AI、击飞……）有地方写。
+//! - [`DamageMessage`] / [`UnitDiedMessage`]：受伤 / 死亡的消息总线
 //! - model-side system：[`apply_damage_messages`] + [`transition_to_dead`]
 //! - lifecycle observer：[`disable_body_on_dead`] + [`reenable_body_on_revive`]
 //!
@@ -41,6 +46,8 @@
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
+
+use movement::{MoveVelocity, OnGround};
 
 /// 标记一个 entity 是"角色"。玩家 / 敌人 / 佣兵 / 召唤物 / NPC 都带它。
 ///
@@ -105,7 +112,7 @@ pub struct Dead;
 pub const UNIT_BODY_HEIGHT: f32 = 2.0;
 
 /// 标记一个 unit "有 body"：在物理世界占体积、跟墙碰撞、跟其他带 body
-/// 的 unit 互相推挤。
+/// 的 unit 互相挡路。
 ///
 /// 这是**存在性**标记 —— marker 在表示"该 unit 类型本来就有 body"；
 /// marker 缺席表示该 unit 永久无 body（如飞行单位、灵体单位），不应被
@@ -120,14 +127,27 @@ pub const UNIT_BODY_HEIGHT: f32 = 2.0;
 /// [`reenable_body_on_revive`] observer 处理；具体 unit 类型只需在自己
 /// 的 `#[require(...)]` 链里写上 `Body`、spawn 时手动挂 `Collider` 即可。
 ///
+/// # body 模式：Kinematic + 自主 sweep-and-slide
+///
+/// 所有带 `Body` 的 unit 都跑 [`movement`] 模块的 Kinematic 移动子系统：
+/// 写 [`MoveVelocity`] → `apply_movement` 每帧 sweep-and-slide → 写回
+/// `Position`。这样"互相挡 + 挡障碍 + 不被动量推走"是默认行为，**没有**
+/// Dynamic 那种"撞一下被甩开"的物理推动效果。详见 [`movement`] 模块顶部
+/// 文档。
+///
+/// `#[require(MoveVelocity, OnGround)]`：spawn 一个带 `Body` 的 entity 时，
+/// Bevy 自动补这两个组件（缺一个，movement 系统的 query filter 就不命中），
+/// 调用方无需手动挂。
+///
 /// # 形状约定：capsule 同高
 ///
 /// Ground unit 用 `Collider::capsule(BODY_RADIUS, UNIT_BODY_HEIGHT - 2.0 *
 /// BODY_RADIUS)` —— 共享 [`UNIT_BODY_HEIGHT`] 总高度，每个 unit 自定半径。
-/// 这样不同体型的 unit 互相推挤时 Y 方向不会抖动（见 [`UNIT_BODY_HEIGHT`]
+/// 这样不同体型的 unit 互相挡路时 Y 方向不会抖动（见 [`UNIT_BODY_HEIGHT`]
 /// 文档的根因解释）。半径必须 ≤ `UNIT_BODY_HEIGHT / 2`，超出的 unit 要
 /// 走自己的 shape 路径。
 #[derive(Component, Debug, Default)]
+#[require(MoveVelocity, OnGround)]
 pub struct Body;
 
 /// 给 unit 造成伤害的消息 —— 任何"伤害源"（近战、投射物、debuff tick、
@@ -269,4 +289,5 @@ fn reenable_body_on_revive(
 // ============================================================================
 
 pub mod dragon1;
+pub mod movement;
 pub mod player;

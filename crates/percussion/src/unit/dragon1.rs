@@ -140,17 +140,17 @@ pub fn spawn_dragon1(
         .spawn((
             Dragon1,
             Transform::from_translation(local_pos),
-            // Dynamic 刚体：靠重力落地，靠 stage 屏障挡 XZ 移动。等 AI
-            // 接入时可能改 Kinematic（自走逻辑驱动），现在跟 player 一样
-            // 走完整物理通路验证。
-            RigidBody::Dynamic,
+            // Kinematic 刚体：跟 player 同模式（见 `unit/movement.rs` 顶部
+            // 文档）。dragon1 还没 AI，`MoveVelocity` 默认 (0,0,0)，唯一
+            // 不为零的来源是重力 —— spawn 在空中 → 自然落地 → on_ground
+            // 后重力归零、原地站立。等 AI 接入只是"多一个写
+            // MoveVelocity.xz 的来源"，movement 通路本身不变。
+            RigidBody::Kinematic,
             // capsule body，选型思路同 [`Player`](super::player::Player)。总高
-            // [`UNIT_BODY_HEIGHT`] 全场 ground unit 共享，不同 R 互推时纯 XZ
-            // 修正，Y 不抽。
+            // [`UNIT_BODY_HEIGHT`] 全场 ground unit 共享，不同 R 互推时接触
+            // 法线纯水平，Y 不抽。
             Collider::capsule(DRAGON1_BODY_RADIUS, DRAGON1_BODY_LENGTH),
             LockedAxes::ROTATION_LOCKED,
-            SleepingDisabled,
-            TransformInterpolation,
             ChildOf(parent_stage),
         ))
         .id();
