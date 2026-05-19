@@ -143,3 +143,45 @@ bisect 实测：单这一项就够，下面这些都不是必要条件，加了�
 1. 看 CPU / GPU 负载 —— CPU 满 GPU 闲 → debugger 锅；GPU 满 CPU 闲 → 引擎 / shader 锅。先分清楚再修。
 2. 检查 `_NO_DEBUG_HEAP=1` 在不在 `launch.json` 的 `env` 里
 3. 检查 `lldb.useNativePDBReader: true` 在不在 `settings.json` 里
+
+
+## Bevy ECS / 调度
+
+### B0001 是 SystemParam 的"声明访问"在打架 —— 跟运行时实际用没用无关
+
+**症状**：app 启动期 panic，`error[B0001]: Query<...> in system <X> accesses component(s) Foo in a way that conflicts with a previous system parameter`。
+
+**原因**：Bevy scheduler 在 system 注册时，**静态、保守、聚合**地扫描 system 的所有参数，凡是带 `Query` / `Res` / `ResMut` 的（包括嵌在 `#[derive(SystemParam)] struct` 里的字段）都纳入"声明访问集"。两个集合在某个组件 + 某个实体子集上越权（`&mut` × `&` 或 `&mut` × `&mut`）就拒绝。**不看运行时实际是否同时访问。**
+
+第三方 SystemParam（avian / leafwing-input / egui / replicon …）每个都是一个"自带嫁妆"的结构体：你写 `mover: MoveAndSlide` 等于声明了它内部 `spatial_query: SpatialQuery` 那条线一路下去所有 `Query<&Position, ..>` 之类的访问。
+
+**诊断流程**：
+
+1. panic 信息抓"previous system parameter" 的名字
+2. `rg "pub struct <名字>" -A 30` 找它的 `#[derive(SystemParam)]` 字段
+3. 字段里每个 `Query<...>` / `Res<...>` 是已花掉的 budget，**整套**继承到你的 system
+4. 你自己 query 在剩下空间里挑
+
+普遍适用于**任何**第三方 SystemParam，不局限于 avian。这是写"组合式"游戏系统的根本边界感。
+
+### avian: `MoveAndSlide` 自己更新位置走 `&mut Transform`，不要碰 `&mut Position`
+
+[`MoveAndSlide`] 内部 `spatial_query: SpatialQuery` 字段递归过去声明了 `Query<&Position, ..>`（全实体只读）。外层 query 写 `&mut Position, With<Body>` 跟它在 Body 子集上 read/write 冲突 → 上面那条 B0001。
+
+avian 官方 `examples/move_and_slide_3d.rs` / `examples/kinematic_character_3d/` 的标准写法是 query `&mut Transform`：
+
+```rust
+Query<(Entity, &Collider, &mut Transform, ...), With<...>>
+// ...
+transform.translation = out.position;  // 不写 Position
+```
+
+`PhysicsSystems::Prepare` 阶段 avian 会做 `Transform → Position` 同步，所以"写 Transform.translation"等价于"设置 avian 位置"。Transform 不属于 avian 任何 SystemParam 的查询范围，零冲突。
+
+`Rotation` / `Collider` 是只读访问，自己 query 里挂也行（read × read 不冲突）。**唯一**禁忌就是 `&mut Position`。
+
+### avian 0.18 / 0.6 把 `PhysicsSet` 改叫 `PhysicsSystems`
+
+旧名仍能 compile，但带 `deprecated` 警告。`cargo clippy -- -D warnings` 直接 fail。
+迁移就是字面意思 `PhysicsSet::Prepare` → `PhysicsSystems::Prepare`。变体名不变。
+
