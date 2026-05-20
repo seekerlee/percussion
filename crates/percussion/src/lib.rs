@@ -82,6 +82,12 @@ impl Plugin for GamePlugin {
             unit::movement::MovementPlugin,
             unit::hurtbox::HurtboxPlugin,
             sprite_billboard::BillboardPlugin,
+            // bevy_sprite3d：3D 场景里的 2D sprite（Delver / 饥荒风）通
+            // 用支持。`Sprite3d` 在 PostUpdate 的 bundle_builder system 里
+            // 读 `Sprite.image` 尺寸 → 自动建 quad mesh + StandardMaterial；
+            // mesh / material 资产内部缓存，多 entity 共享。详见
+            // `unit/player.rs` 的 spawn 路径示例。
+            bevy_sprite3d::prelude::Sprite3dPlugin,
             stage::StagePlugin,
             unit::player::PlayerPlugin,
             unit::dragon1::Dragon1Plugin,
@@ -198,8 +204,6 @@ fn spawn_initial_scene(
     unit::player::spawn_player(
         &mut commands,
         &player_assets,
-        &mut meshes,
-        &mut materials,
         stage_entity,
         Vec3::new(0.0, 5.0, 0.0),
     );
@@ -209,8 +213,6 @@ fn spawn_initial_scene(
     unit::dragon1::spawn_dragon1(
         &mut commands,
         &dragon1_assets,
-        &mut meshes,
-        &mut materials,
         stage_entity,
         Vec3::new(3.0, 5.0, 0.0),
     );
