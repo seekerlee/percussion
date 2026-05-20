@@ -18,6 +18,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
+use bevy_sprite3d::prelude::*;
 
 use super::hurtbox::spawn_hurtbox;
 use super::{Body, Health, UNIT_BODY_HEIGHT, Unit};
@@ -39,13 +40,6 @@ const DRAGON1_BODY_RADIUS: f32 = 0.4;
 /// capsule 的圆柱段长度（不含两端半球）—— H = 2R + L → L = H - 2R。
 const DRAGON1_BODY_LENGTH: f32 = UNIT_BODY_HEIGHT - 2.0 * DRAGON1_BODY_RADIUS;
 
-/// sprite 贴片的像素尺寸。
-///
-/// 改这两个常数 = 改贴片在世界里的米数（÷ [`PIXELS_PER_METER`]）。
-/// 项目约定 32 px = 1 m，详见 `doc/units-and-assets.md`。
-const DRAGON1_SPRITE_PIXELS_WIDTH: f32 = 64.0;
-const DRAGON1_SPRITE_PIXELS_HEIGHT: f32 = 64.0;
-
 /// Dragon1 初始最大生命值。
 const DRAGON1_MAX_HEALTH: f32 = 50.0;
 
@@ -53,17 +47,12 @@ const DRAGON1_MAX_HEALTH: f32 = 50.0;
 // 上面是要填的；下面是由它们推导出来的，一般不用改。
 // ============================================================================
 
-const DRAGON1_SPRITE_WIDTH: f32 = DRAGON1_SPRITE_PIXELS_WIDTH / PIXELS_PER_METER;
-const DRAGON1_SPRITE_HEIGHT: f32 = DRAGON1_SPRITE_PIXELS_HEIGHT / PIXELS_PER_METER;
-/// sprite 子实体相对父实体的 Y 偏移（米）—— 让 sprite 的"脚"贴地面。
-///
-/// 推导同 [`player`](super::player) 的 `PLAYER_SPRITE_OFFSET_Y`：父 entity
-/// 落地后中心在 `y = UNIT_BODY_HEIGHT / 2`（capsule 中心 = 总高一半），
-/// sprite mesh 中心应在 `y = sprite_height / 2`，所以偏移 =
-/// `(sprite_height - UNIT_BODY_HEIGHT) / 2`。
-///
-/// 当前 Dragon1 sprite 刚好 2m，与 [`UNIT_BODY_HEIGHT`] 对齐 → 偏移为 0。
-const DRAGON1_SPRITE_OFFSET_Y: f32 = (DRAGON1_SPRITE_HEIGHT - UNIT_BODY_HEIGHT) * 0.5;
+/// sprite 子实体相对父实体的 Y 偏移（米）。推导同
+/// [`PLAYER_SPRITE_OFFSET_Y`](super::player) —— 配合
+/// [`Sprite3d::pivot`] = `(0.5, 0.0)` 让贴图“脚中”对齐 sprite mesh
+/// 局部 (0,0)，所以子实体局部 Y 直接抵消父 entity（capsule 中心）
+/// 到地面的距离。
+const DRAGON1_SPRITE_OFFSET_Y: f32 = -UNIT_BODY_HEIGHT * 0.5;
 
 /// Dragon1 的预加载资产集合。
 ///
@@ -75,12 +64,12 @@ const DRAGON1_SPRITE_OFFSET_Y: f32 = (DRAGON1_SPRITE_HEIGHT - UNIT_BODY_HEIGHT) 
 /// nearest sampler 保留像素边缘锐利（同 player）。
 #[derive(AssetCollection, Resource)]
 pub struct Dragon1Assets {
-    /// Dragon1 身体 sprite 贴图。
+    /// Dragon1 身体 sprite 贴图（现阶段单帧占位）。
     ///
-    /// **文件路径必须存在**：`crates/percussion/assets/sprites/dragon1.png`。
+    /// **文件路径必须存在**：`crates/percussion/assets/sprites/units/dragon1/sunny-dragon-fly.png`。
     /// 缺文件 `bevy_asset_loader` 会让 LoadingState 永不就绪，游戏卡在
-    /// Loading 黑屏 —— 这是符合预期的"硬依赖"，不要静默 fallback。
-    #[asset(path = "sprites/dragon1.png")]
+    /// Loading 黑屏 —— 这是符合预期的“硬依赖”，不要静默 fallback。
+    #[asset(path = "sprites/units/dragon1/sunny-dragon-fly.png")]
     #[asset(image(sampler(filter = nearest)))]
     pub sprite: Handle<Image>,
 }
@@ -121,23 +110,9 @@ impl Plugin for Dragon1Plugin {
 pub fn spawn_dragon1(
     commands: &mut Commands,
     assets: &Dragon1Assets,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
     parent_stage: Entity,
     local_pos: Vec3,
 ) -> Entity {
-    let sprite_mesh = meshes.add(Rectangle::new(DRAGON1_SPRITE_WIDTH, DRAGON1_SPRITE_HEIGHT));
-    let sprite_material = materials.add(StandardMaterial {
-        base_color_texture: Some(assets.sprite.clone()),
-        // Mask：alpha > cutoff 不透，否则完全透 —— 抠图边缘干脆。
-        alpha_mode: AlphaMode::Mask(0.5),
-        // unlit：保留贴图原貌，不让 3D 光照"加工"手绘色。
-        unlit: true,
-        // 双面渲染：billboard 转动过程中背面也可能被看到。
-        cull_mode: None,
-        ..default()
-    });
-
     let entity = commands
         .spawn((
             Dragon1,
@@ -160,10 +135,17 @@ pub fn spawn_dragon1(
         ))
         .id();
 
+    // sprite 子实体 —— 见 [`spawn_player`](super::player::spawn_player) 的
+    // 同名块文档，结构与说明一致。
     commands.spawn((
         BillboardSprite,
-        Mesh3d(sprite_mesh),
-        MeshMaterial3d(sprite_material),
+        Sprite3d {
+            pixels_per_metre: PIXELS_PER_METER,
+            unlit: true,
+            pivot: Some(Vec2::new(0.5, 0.0)),
+            ..default()
+        },
+        Sprite::from_image(assets.sprite.clone()),
         Transform::from_translation(Vec3::new(0.0, DRAGON1_SPRITE_OFFSET_Y, 0.0)),
         ChildOf(entity),
     ));
