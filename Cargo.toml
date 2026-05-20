@@ -21,11 +21,16 @@ bevy_sprite3d = "8.0"
 # `#[derive(AssetCollection)]` 声明自家资产，加载完成后自动插
 # 成 Resource、并切到下一个 state。避免手写轮询 + 手存 `Handle<T>`。
 #
-# 启 `3d` feature：让 `#[asset(image(sampler(...)))]` 属性可用
-# （image 采样器配置依赖 bevy_render 类型，要么开 `2d` 要么开 `3d`，
-#  开哪个都行；本项目走 3D，顺手开 `3d`，附带也支持直接加载
-#  `Handle<StandardMaterial>`，未来可能用得上）。
-bevy_asset_loader = { version = "0.26", features = ["3d"] }
+# Features:
+# - `3d`：让 `#[asset(image(sampler(...)))]` 属性可用（image 采样器配置
+#   依赖 bevy_render 类型，2d / 3d 任一即可；本项目走 3D），附带支持
+#   直接加载 `Handle<StandardMaterial>`。
+# - `2d`：让 `#[asset(texture_atlas_layout(...))]` 属性可用 —— 用于在
+#   AssetCollection 里直接声明 `Handle<TextureAtlasLayout>`，避免手写
+#   一个填 layout 的 system。注意：feature 名叫 `2d` 是个历史 artifact，
+#   `TextureAtlasLayout` 本身跟维度无关、`bevy_sprite3d` 也照样吃，开
+#   2d 不会拉真的 2D 渲染管线进来。
+bevy_asset_loader = { version = "0.26", features = ["3d", "2d"] }
 # Pan/orbit camera controller — used only by the dev-build camera helper
 # (see crates/percussion/src/dev_camera.rs). Release builds gate the module
 # behind `cfg(debug_assertions)` so this dep does not enter the shipped binary.

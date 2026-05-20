@@ -18,6 +18,9 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
+use bevy_sprite3d::prelude::*;
+
+pub mod animation;
 
 use super::hurtbox::spawn_hurtbox;
 use super::movement::MoveVelocity;
@@ -25,6 +28,7 @@ use super::{Body, DamageMessage, Dead, Health, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
 use crate::physics_layers::GameLayer;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
+use animation::{PlayerAnimationPlugin, PlayerAnimationState};
 
 /// 玩家物理 body 半径（米）。
 ///
@@ -40,27 +44,17 @@ const PLAYER_BODY_RADIUS: f32 = 0.4;
 /// capsule 的圆柱段长度（**不含**两端半球）—— avian `Collider::capsule`
 /// 第二个参数要的就是这个。推导：总高 H = 2R + L → L = H - 2R。
 const PLAYER_BODY_LENGTH: f32 = UNIT_BODY_HEIGHT - 2.0 * PLAYER_BODY_RADIUS;
-/// 玩家 sprite 贴片尺寸（像素）。
-///
-/// 当前贴图是 128×64 单图：人物画在中间，左右两侧大片透明。透明像
-/// 素不渲染，mesh 按贴图原始比例建立即可。换图改这两个常数。
-///
-/// 128 px ÷ [`PIXELS_PER_METER`] = 4 m 宽；64 px = 2 m 高。视觉上角色只占
-/// 中间一小块，不影响显示正确性。
-const PLAYER_SPRITE_PIXELS_WIDTH: f32 = 128.0;
-const PLAYER_SPRITE_PIXELS_HEIGHT: f32 = 64.0;
-const PLAYER_SPRITE_WIDTH: f32 = PLAYER_SPRITE_PIXELS_WIDTH / PIXELS_PER_METER;
-const PLAYER_SPRITE_HEIGHT: f32 = PLAYER_SPRITE_PIXELS_HEIGHT / PIXELS_PER_METER;
 /// sprite 子实体相对父实体的 Y 偏移（米）。
 ///
-/// 推导：让 sprite 的**脚**贴地面（y_world = 0）。玩家落地后父 entity
-/// 位于 `y_world = UNIT_BODY_HEIGHT / 2`（capsule 中心 = 总高一半）；
-/// sprite mesh 中心应在 `y_world = sprite_height / 2`。所以子实体本地
-/// Y = `(sprite_height - UNIT_BODY_HEIGHT) / 2`。
+/// 配合 [`Sprite3d::pivot`] = `(0.5, 0.0)` 使用：贴图的“脚中”对齐到
+/// sprite mesh 的局部 (0, 0)，所以子实体局部 (0, 0) 落在哪，sprite
+/// 的“脚”就在哪。父 entity（capsule）落地后中心位于
+/// `y_world = UNIT_BODY_HEIGHT / 2`，要让“脚”贴地面（`y_world = 0`），
+/// 子实体局部 Y = `0 - UNIT_BODY_HEIGHT / 2`。
 ///
-/// 当 sprite_height == UNIT_BODY_HEIGHT 时 offset = 0（当前 Player sprite
-/// 刚好 2m，与 [`UNIT_BODY_HEIGHT`] 对齐 → 偏移为 0）。
-const PLAYER_SPRITE_OFFSET_Y: f32 = (PLAYER_SPRITE_HEIGHT - UNIT_BODY_HEIGHT) * 0.5;
+/// 这个偏移**只跟物理 body 总高有关**，跟 sprite 贴图自身像素尺寸
+/// 完全解耦 —— 换贴图 / 换 sprite sheet / 换帧大小都不用动它。
+const PLAYER_SPRITE_OFFSET_Y: f32 = -UNIT_BODY_HEIGHT * 0.5;
 /// 玩家平移速度（米/秒）。
 const PLAYER_SPEED: f32 = 5.0;
 /// 玩家初始最大生命值。数值是 prototype 阶段的占位，等战斗公式立起来再调。
@@ -81,12 +75,28 @@ const PLAYER_MAX_HEALTH: f32 = 100.0;
 /// —— 保留像素边缘锐利，不让 linear 插值把像素艺术糊掉。
 #[derive(AssetCollection, Resource)]
 pub struct PlayerAssets {
-    /// 玩家身体 sprite 贴图。当前是 128×64 单图（人物画在中间，左右大
-    /// 片透明）。未来换 sprite sheet 时，可以在 `AssetCollection` 里加
-    /// `texture_atlas_layout` 属性，让 bevy_asset_loader 直接吐 `Handle<TextureAtlasLayout>`。
-    #[asset(path = "sprites/player.png")]
+    /// 玩家合表后的总 sprite sheet。
+    ///
+    /// 由外部工具 [`crates/tools/src/bin/stitch_player_sprites.rs`] 把
+    /// `idle.png` / `run.png` / `attack.png` / `jump.png` 横向拼成单张
+    /// 2560×64 的 PNG（20 帧 × 128×64）。**改源图后必须重跑 stitcher**
+    /// 才能让游戏看到改动。
+    ///
+    /// 为什么不直接加载 4 张分动作图：`bevy_sprite3d` 在 entity spawn
+    /// 时把每帧 UV 烤进 mesh 缓存（UV 还依赖整张图尺寸），单 sprite
+    /// entity 只能绑一张图。合表 + 单一 [`TextureAtlasLayout`] 让同一
+    /// entity 切动作 = 改 frame index，零 entity 重生成开销。
+    #[asset(path = "sprites/units/player/sheet.png")]
     #[asset(image(sampler(filter = nearest)))]
-    pub sprite: Handle<Image>,
+    pub sheet: Handle<Image>,
+
+    /// 描述 [`sheet`](Self::sheet) 上每帧位置的 atlas layout。
+    ///
+    /// 20 列 × 1 行，单帧 128×64 —— 顺序与 stitcher 的 `ACTIONS`
+    /// 列表对齐，具体 index 区间在
+    /// [`animation::PlayerAction::range`] 里硬编码。
+    #[asset(texture_atlas_layout(tile_size_x = 128, tile_size_y = 64, columns = 20, rows = 1))]
+    pub layout: Handle<TextureAtlasLayout>,
 }
 
 /// 玩家标记。
@@ -96,7 +106,12 @@ pub struct PlayerAssets {
 /// 且无需手写的生命值初始为满血"。实现上是组合而非继承：组件都挂在
 /// 同一 entity 上。
 #[derive(Component, Debug, Default)]
-#[require(Unit, Body, Health = Health::new(PLAYER_MAX_HEALTH))]
+#[require(
+    Unit,
+    Body,
+    Health = Health::new(PLAYER_MAX_HEALTH),
+    PlayerAnimationState,
+)]
 pub struct Player;
 
 /// Player 插件 —— 注册键盘移动 system，以及 debug build 下的调试快捷键。
@@ -111,6 +126,10 @@ impl Plugin for PlayerPlugin {
         app.configure_loading_state(
             LoadingStateConfig::new(AppState::Loading).load_collection::<PlayerAssets>(),
         );
+
+        // 动画状态机 —— 放在子 plugin 里、调度在 PostUpdate，详见
+        // `animation.rs` 模块文档。
+        app.add_plugins(PlayerAnimationPlugin);
 
         // 玩家移动：每帧根据输入写 `LinearVelocity`，物理在 `FixedPostUpdate`
         // 64Hz 积分。配合 entity 上的 `TransformInterpolation`，资产同帧间插值到
@@ -151,26 +170,9 @@ impl Plugin for PlayerPlugin {
 pub fn spawn_player(
     commands: &mut Commands,
     player_assets: &PlayerAssets,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
     parent_stage: Entity,
     local_pos: Vec3,
 ) -> Entity {
-    // sprite 贴图：采样器（nearest）已经在 PlayerAssets 加载时设过，这里
-    // 只需 clone handle 拿来当 material 的 base_color_texture。
-    let sprite_mesh = meshes.add(Rectangle::new(PLAYER_SPRITE_WIDTH, PLAYER_SPRITE_HEIGHT));
-    let sprite_material = materials.add(StandardMaterial {
-        base_color_texture: Some(player_assets.sprite.clone()),
-        // Mask：alpha > cutoff 不透，否则完全透 —— 贴图边缘干净。不用 Blend
-        // 是因为 Blend 要按深度排序，多个 sprite 重叠时会闪。
-        alpha_mode: AlphaMode::Mask(0.5),
-        // unlit：不让 3D 灯光"加工"手绘贴图颜色，保留原貌 —— 饮荒风格的关键。
-        unlit: true,
-        // 双面渲染：billboard 转动过程中背面也可能被看到，不能被 cull。
-        cull_mode: None,
-        ..default()
-    });
-
     let player_entity = commands
         .spawn((
             Player,
@@ -197,12 +199,34 @@ pub fn spawn_player(
         ))
         .id();
 
-    // sprite 子实体：独立的视觉结点。LocalTransform 抬高是为了让贴片的
-    // "脚"落在地面上，而不是穿出物理盒中央。
+    // sprite 子实体：独立视觉结点。`Sprite3d` (bevy_sprite3d) 在 PostUpdate
+    // 的 bundle_builder system 里读 `Sprite.image` 尺寸自动生成 quad mesh +
+    // 配套的 `StandardMaterial`（`alpha_mode` 默认 Mask(0.5)、`double_sided=true`
+    // 替代我们以前手写的 `cull_mode: None`）。我们这里只挂“数据”：图片、
+    // 像素密度、unlit、pivot；mesh / material 资产由 sprite3d 内部缓存，多
+    // entity 共享。
+    //
+    // pivot=(0.5, 0.0)：让贴图的“脚中”对齐到 sprite mesh 局部 (0, 0)，
+    // 详见 [`PLAYER_SPRITE_OFFSET_Y`] 文档。
     commands.spawn((
         BillboardSprite,
-        Mesh3d(sprite_mesh),
-        MeshMaterial3d(sprite_material),
+        Sprite3d {
+            pixels_per_metre: PIXELS_PER_METER,
+            unlit: true,
+            pivot: Some(Vec2::new(0.5, 0.0)),
+            ..default()
+        },
+        // 用 atlas 形态：bevy_sprite3d 看到 `Sprite.texture_atlas`
+        // 是 `Some` 时，会按 layout 里的每帧分别预烤一张共享 mesh，
+        // 之后切动作只需要改 `texture_atlas.index`，mesh 由
+        // `handle_texture_atlases` system 自动换。
+        Sprite::from_atlas_image(
+            player_assets.sheet.clone(),
+            TextureAtlas {
+                layout: player_assets.layout.clone(),
+                index: 0,
+            },
+        ),
         Transform::from_translation(Vec3::new(0.0, PLAYER_SPRITE_OFFSET_Y, 0.0)),
         ChildOf(player_entity),
     ));
