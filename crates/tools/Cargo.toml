@@ -1,0 +1,19 @@
+[package]
+name = "tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# 仓库级别的一次性工具集。
+#
+# 这里的 binary 不参与游戏运行，只在开发期手动跑（合 sprite sheet、
+# 转资源格式、检查 asset 完整性 等）。每个工具一个 `src/bin/*.rs`，
+# 用 `cargo run -p tools --bin <name>` 调起。
+#
+# 依赖故意只在本 crate 局部声明（不进 workspace.dependencies），
+# 避免给主游戏 crate 引入无关传递依赖 / 拖慢主项目编译。
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+anyhow = "1"
