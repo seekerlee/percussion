@@ -19,9 +19,11 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
 
+use super::hurtbox::spawn_hurtbox;
 use super::movement::MoveVelocity;
 use super::{Body, DamageMessage, Dead, Health, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
+use crate::physics_layers::GameLayer;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
 
 /// 玩家物理 body 半径（米）。
@@ -182,6 +184,10 @@ pub fn spawn_player(
             // 法线纯水平，Y 方向不抽。总高 [`UNIT_BODY_HEIGHT`] 为全场
             // ground unit 共享，这里只需在调用点拼出 cylinder 段长度。
             Collider::capsule(PLAYER_BODY_RADIUS, PLAYER_BODY_LENGTH),
+            // CollisionLayers：membership = Body，filter = [Body, Terrain]。
+            // body 只跟其他 unit body 和地形互推，跳过 hurtbox / hitbox
+            // —— 避免被自己的受击盒顶起来、避免被友军攻击 sensor 推开。
+            CollisionLayers::new(GameLayer::Body, [GameLayer::Body, GameLayer::Terrain]),
             // 防止被撞翻滚 —— 俯视斜角游戏角色应保持站立。不锁
             // 转动会被击飞 / 撞压之类的接触带动。Kinematic 下其实
             // solver 不会主动转动我们，但保留表达意图。
@@ -200,6 +206,17 @@ pub fn spawn_player(
         Transform::from_translation(Vec3::new(0.0, PLAYER_SPRITE_OFFSET_Y, 0.0)),
         ChildOf(player_entity),
     ));
+
+    // 受击判定：现阶段用跟 body 同型的 capsule 作为整块受击区，
+    // 简单覆盖角色。未来要分头 / 身 / 腿不同倍率时可多次调
+    // `spawn_hurtbox` 贴多块，或者让 hurtbox transform 随动作变。
+    // 当前不预先抽象。
+    spawn_hurtbox(
+        commands,
+        player_entity,
+        Collider::capsule(PLAYER_BODY_RADIUS, PLAYER_BODY_LENGTH),
+        Transform::IDENTITY,
+    );
 
     player_entity
 }

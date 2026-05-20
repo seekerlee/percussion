@@ -19,8 +19,10 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
 
+use super::hurtbox::spawn_hurtbox;
 use super::{Body, Health, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
+use crate::physics_layers::GameLayer;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
 
 // ============================================================================
@@ -150,6 +152,9 @@ pub fn spawn_dragon1(
             // [`UNIT_BODY_HEIGHT`] 全场 ground unit 共享，不同 R 互推时接触
             // 法线纯水平，Y 不抽。
             Collider::capsule(DRAGON1_BODY_RADIUS, DRAGON1_BODY_LENGTH),
+            // CollisionLayers 同 player：body 只跟 body / terrain 互推，不
+            // 被 hurtbox / hitbox sensor 干扰。分层详见 [`crate::physics_layers`]。
+            CollisionLayers::new(GameLayer::Body, [GameLayer::Body, GameLayer::Terrain]),
             LockedAxes::ROTATION_LOCKED,
             ChildOf(parent_stage),
         ))
@@ -162,6 +167,15 @@ pub fn spawn_dragon1(
         Transform::from_translation(Vec3::new(0.0, DRAGON1_SPRITE_OFFSET_Y, 0.0)),
         ChildOf(entity),
     ));
+
+    // 受击判定：同 [`spawn_player`](super::player::spawn_player)，当前用跟
+    // body 同型的 capsule 覆盖整个角色。
+    spawn_hurtbox(
+        commands,
+        entity,
+        Collider::capsule(DRAGON1_BODY_RADIUS, DRAGON1_BODY_LENGTH),
+        Transform::IDENTITY,
+    );
 
     entity
 }

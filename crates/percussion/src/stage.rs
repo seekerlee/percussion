@@ -47,6 +47,8 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use std::f32::consts::{FRAC_PI_2, PI};
 
+use crate::physics_layers::GameLayer;
+
 /// 标记一个 entity 是 stage 的根。
 ///
 /// 这个组件本身不携带数据；具体边界 / 内容由同实体上的其他组件描述。
@@ -187,12 +189,17 @@ pub fn spawn_stage(
             // 落下来的角色，再加一个 2cm 厚的 cuboid collider。1cm 的厚度
             // 误差视觉上完全看不见。地面 collider 同时充当 bounds 6 面屏障
             // 的"底面" —— 不在下面 `barriers` 数组里另外算。
+            //
+            // CollisionLayers：membership = Terrain，filter = [Body]。
+            // 只跟 unit body 互相看，对 hurtbox / hitbox sensor 透明 ——
+            // 避免攻击 sensor 把地板当受害者误触发。
             stage.spawn((
                 Mesh3d(ground_mesh),
                 MeshMaterial3d(ground_material),
                 Transform::default(),
                 RigidBody::Static,
                 Collider::cuboid(size.x, 0.02, size.y),
+                CollisionLayers::new(GameLayer::Terrain, [GameLayer::Body]),
             ));
 
             // 5 面半透明罩 (4 立面 + 顶)：纯 mesh，不带 collider。
@@ -205,11 +212,13 @@ pub fn spawn_stage(
             }
 
             // 5 面物理屏障 (4 立面 + 顶)：纯 collider，没有 mesh。
+            // 同地面一样挂 Terrain layer —— 拒绝 hurtbox / hitbox sensor 误触发。
             for (center, full_size) in barriers {
                 stage.spawn((
                     Transform::from_translation(center),
                     RigidBody::Static,
                     Collider::cuboid(full_size.x, full_size.y, full_size.z),
+                    CollisionLayers::new(GameLayer::Terrain, [GameLayer::Body]),
                 ));
             }
         })

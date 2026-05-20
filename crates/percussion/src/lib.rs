@@ -22,6 +22,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 pub mod app_state;
+pub mod physics_layers;
 pub mod sprite_billboard;
 pub mod stage;
 pub mod unit;
@@ -79,6 +80,7 @@ impl Plugin for GamePlugin {
         .add_plugins((
             unit::UnitPlugin,
             unit::movement::MovementPlugin,
+            unit::hurtbox::HurtboxPlugin,
             sprite_billboard::BillboardPlugin,
             stage::StagePlugin,
             unit::player::PlayerPlugin,

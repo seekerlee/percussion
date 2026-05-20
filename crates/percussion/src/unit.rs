@@ -289,5 +289,6 @@ fn reenable_body_on_revive(
 // ============================================================================
 
 pub mod dragon1;
+pub mod hurtbox;
 pub mod movement;
 pub mod player;
