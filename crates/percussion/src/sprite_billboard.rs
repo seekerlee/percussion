@@ -32,21 +32,40 @@
 //! 中心连线对应的 world 地面点（详见 [`face_camera`] 文档）。这个项目目前
 //! 不画 sprite 自身阴影、相机也不会做大幅 pitch 变化，偏移不显眼。
 //!
-//! # 对父旋转鲁棒
+//! # 父的 world rotation 怎么拿
 //!
 //! Bevy 的 [`Transform`] 是**局部坐标**，sprite 的 world rotation =
-//! parent.world_rotation × sprite.local_rotation。如果直接给 local 写
-//! 目标姿态（像旧版本那样调 [`Transform::look_to`]），只要父有任何旋转
-//! 漂移，sprite 在 world 里就跟着歪。
+//! parent.world_rotation × sprite.local_rotation。billboard 想让 sprite
+//! world rotation 等于相机 world rotation，必须先知道父的 world rotation
+//! 才能反算 local rotation 该写多少。
 //!
-//! 容易踩的坑：挂 sprite 的 unit 一般会带 [`avian3d::prelude::LockedAxes::ROTATION_LOCKED`]
-//! 防止被撞翻滚，**但 Avian 0.6 的这个 flag 只在每物理步把角速度三个
-//! 分量清零，不会把 `Transform.rotation` 强制扣回 identity**。碰撞冲量、
-//! 穿透推回、数值漂移都会给父 entity 加一点点旋转，几秒后累积成肉眼
-//! 可见的歪。
+//! 本 system **直接通过 [`ChildOf`] 查父 entity 的 [`GlobalTransform`]**，
+//! 读出干净的 `parent.world_rotation`。代价是每个 sprite 多一次 entity
+//! 查询，量级可忽略。
 //!
-//! 因此本 system 不假设父级旋转 —— 算出目标 **world rotation**（= 相机
-//! 的 world rotation），再反推该写到 local rotation 的值（见 [`face_camera`]）。
+//! 不假设父 rotation 永远 identity —— 容易踩的坑：挂 sprite 的 unit 一般
+//! 带 [`avian3d::prelude::LockedAxes::ROTATION_LOCKED`] 防止被撞翻滚，
+//! **但 Avian 0.6 这个 flag 只在每物理步把角速度三个分量清零，不会把
+//! `Transform.rotation` 强制扣回 identity**。碰撞冲量、穿透推回、数值
+//! 漂移都会给父 entity 加一点点旋转。这里直接读父当前 world rotation，
+//! 漂移多少都会被自动补偿。
+//!
+//! # 为什么不"反推父 world"省一次 query
+//!
+//! 曾经写过 `parent.world_rotation = sprite.world_rotation ×
+//! sprite.local_rotation⁻¹` 的版本，少一次 query 看似聪明。但这个等式
+//! **只在 sprite local 是纯旋转时成立**。一旦 sprite local 里掺了非
+//! 旋转分量（典型场景：玩家朝向左时给 sprite 子 entity 设
+//! `Transform.scale.x = -1` 镜像翻转贴图，见
+//! `unit::player::animation::tick_player_animation`），sprite 的 affine
+//! 矩阵带反射（行列式 = -1）。glam 的
+//! [`Affine3A::to_scale_rotation_translation`](bevy::math::Affine3A::to_scale_rotation_translation)
+//! 会把 -1 塞到 `scale.x` 字段，剩下的"rotation"是从一组**左手系**正交
+//! 基跑 Shepherd 法得到的伪四元数（不是 proper rotation）。这个 garbage
+//! quat 代回反推公式，sprite world 累积出 scale / shear —— 相机一转，
+//! sprite 疯狂闪烁扭曲。直接查父就规避了整套陷阱：父（unit entity）
+//! 自身没有 scale 翻转，`GlobalTransform::rotation()` 返回的就是干净的
+//! 旋转。
 
 use bevy::prelude::*;
 
@@ -99,21 +118,14 @@ impl Plugin for BillboardPlugin {
 /// - sprite 局部 +Y → 相机 +Y（image-up）→ sprite 的"头"投影成屏幕正上
 /// - sprite 局部 +X → 相机 +X（image-right）
 ///
-/// 然后反推 local rotation —— 见模块顶部"对父旋转鲁棒"。
+/// 反算 local rotation：
 ///
-/// # 反推 local rotation 的代数
+/// ```text
+/// sprite.local_rotation = parent.world_rotation⁻¹ × camera.world_rotation
+/// ```
 ///
-/// 已知：
-/// - `current_world = parent_world × current_local`（Bevy transform 传播）
-/// - 想要：`new_world = parent_world × new_local`，且 `new_world = desired`
-///
-/// 解出：
-/// - `parent_world = current_world × current_local⁻¹`
-/// - `new_local = parent_world⁻¹ × desired = current_local × current_world⁻¹ × desired`
-///
-/// 用 sprite 自己上一帧的 [`GlobalTransform`] + 当前 [`Transform`] 就能
-/// 反推出 parent world rotation，不必再 query 父 entity。落后一帧的代价
-/// 是父旋转漂移那一丁点；俯视斜角下完全看不出来。
+/// 通过 [`ChildOf`] 查父 entity 的 [`GlobalTransform`] 拿
+/// `parent.world_rotation`。详见模块顶部"父的 world rotation 怎么拿"。
 ///
 /// # 已知视觉代价："脚"漂移
 ///
@@ -131,9 +143,12 @@ impl Plugin for BillboardPlugin {
 /// - **单相机**：场景里没有 [`Camera3d`] 或有多个则整帧静默跳过；多相机
 ///   分屏那天再扩展。
 /// - **Rectangle mesh 正面是 +Z**：sprite 的正面贴图朝向局部 +Z 轴。
+/// - **billboard 有父**：无父时退化到 identity 父旋转。本项目所有 sprite
+///   都是 unit 的子，命中此分支等同误用。
 fn face_camera(
     cameras: Query<&GlobalTransform, (With<Camera3d>, Without<BillboardSprite>)>,
-    mut sprites: Query<(&mut Transform, &GlobalTransform), With<BillboardSprite>>,
+    mut sprites: Query<(&mut Transform, Option<&ChildOf>), With<BillboardSprite>>,
+    parents: Query<&GlobalTransform, Without<BillboardSprite>>,
 ) {
     let Ok(camera_xform) = cameras.single() else {
         return;
@@ -143,11 +158,14 @@ fn face_camera(
     // 拿一次就够 —— 所有 sprite 共用同一个目标。
     let desired_world_rot = camera_xform.rotation();
 
-    for (mut transform, sprite_global) in &mut sprites {
-        // 反推 local rotation（见 doc 注释里的代数推导）。
-        // 注意：sprite_global 是上一帧 transform 传播的产物，与 transform.rotation
-        // 当前值组合即可还原父 world rotation；这正是我们需要的。
-        transform.rotation =
-            transform.rotation * sprite_global.rotation().inverse() * desired_world_rot;
+    for (mut transform, child_of) in &mut sprites {
+        // 直接读父的 world rotation。父没 scale 翻转，rotation() 干净。
+        // 没父时退化到 identity（误用兜底，本项目正常路径不命中）。
+        let parent_world_rot = child_of
+            .and_then(|c| parents.get(c.parent()).ok())
+            .map(|gt| gt.rotation())
+            .unwrap_or(Quat::IDENTITY);
+
+        transform.rotation = parent_world_rot.inverse() * desired_world_rot;
     }
 }
