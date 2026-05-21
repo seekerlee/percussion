@@ -20,6 +20,9 @@ use bevy::prelude::*;
 use bevy_asset_loader::prelude::*;
 use bevy_sprite3d::prelude::*;
 
+pub mod animation;
+
+use animation::{Dragon1AnimationPlugin, Dragon1AnimationState};
 use super::hurtbox::spawn_hurtbox;
 use super::{Body, Health, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
@@ -64,23 +67,29 @@ const DRAGON1_SPRITE_OFFSET_Y: f32 = -UNIT_BODY_HEIGHT * 0.5;
 /// nearest sampler 保留像素边缘锐利（同 player）。
 #[derive(AssetCollection, Resource)]
 pub struct Dragon1Assets {
-    /// Dragon1 身体 sprite 贴图（现阶段单帧占位）。
+    /// Dragon1 sprite sheet —— 1 行 9 帧的扇翅膀循环（192×176 per frame）。
     ///
     /// **文件路径必须存在**：`crates/percussion/assets/sprites/units/dragon1/sunny-dragon-fly.png`。
     /// 缺文件 `bevy_asset_loader` 会让 LoadingState 永不就绪，游戏卡在
     /// Loading 黑屏 —— 这是符合预期的“硬依赖”，不要静默 fallback。
     #[asset(path = "sprites/units/dragon1/sunny-dragon-fly.png")]
     #[asset(image(sampler(filter = nearest)))]
-    pub sprite: Handle<Image>,
+    pub sheet: Handle<Image>,
+    /// 把 sheet 切成 frame index 0..9 的 atlas 布局 —— 跟
+    /// [`PlayerAssets::layout`](super::player::PlayerAssets) 同套机制。
+    /// `tile_size_x/y` 与列数 / 行数必须跟实际 PNG 匹配，否则采到错误
+    /// 区域。
+    #[asset(texture_atlas_layout(tile_size_x = 192, tile_size_y = 176, columns = 9, rows = 1))]
+    pub layout: Handle<TextureAtlasLayout>,
 }
 
 /// Dragon1 标记。
 ///
-/// `#[require(Unit, Health = ...)]`：spawn `Dragon1` 时 Bevy 自动挂上
-/// `Unit` marker 和满血 `Health`，跟 [`Player`](super::player::Player)
-/// 用同一套机制。
+/// `#[require(...)]`：spawn `Dragon1` 时 Bevy 自动挂上 `Unit` marker、
+/// 满血 `Health`、动画状态 —— 跟 [`Player`](super::player::Player) 用同
+/// 一套机制。
 #[derive(Component, Debug, Default)]
-#[require(Unit, Body, Health = Health::new(DRAGON1_MAX_HEALTH))]
+#[require(Unit, Body, Health = Health::new(DRAGON1_MAX_HEALTH), Dragon1AnimationState)]
 pub struct Dragon1;
 
 /// Dragon1 插件 —— 注册 `AssetCollection`，触发 sprite 在 Loading state
@@ -93,6 +102,7 @@ impl Plugin for Dragon1Plugin {
         app.configure_loading_state(
             LoadingStateConfig::new(AppState::Loading).load_collection::<Dragon1Assets>(),
         );
+        app.add_plugins(Dragon1AnimationPlugin);
     }
 }
 
@@ -136,7 +146,8 @@ pub fn spawn_dragon1(
         .id();
 
     // sprite 子实体 —— 见 [`spawn_player`](super::player::spawn_player) 的
-    // 同名块文档，结构与说明一致。
+    // 同名块文档，结构与说明一致。atlas 用 sheet + layout 组合，初始
+    // index = 0；每帧由 [`animation::tick_dragon1_animation`] 推进。
     commands.spawn((
         BillboardSprite,
         Sprite3d {
@@ -145,7 +156,13 @@ pub fn spawn_dragon1(
             pivot: Some(Vec2::new(0.5, 0.0)),
             ..default()
         },
-        Sprite::from_image(assets.sprite.clone()),
+        Sprite::from_atlas_image(
+            assets.sheet.clone(),
+            TextureAtlas {
+                layout: assets.layout.clone(),
+                index: 0,
+            },
+        ),
         Transform::from_translation(Vec3::new(0.0, DRAGON1_SPRITE_OFFSET_Y, 0.0)),
         ChildOf(entity),
     ));
