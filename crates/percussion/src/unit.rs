@@ -244,11 +244,7 @@ fn transition_to_dead(
 ///
 /// 没有 `Body` marker 的 unit（飞行 / 灵体）直接跳过 —— 它们本来就没
 /// body 物理，没什么可停的。
-fn disable_body_on_dead(
-    add: On<Add, Dead>,
-    q_body: Query<(), With<Body>>,
-    mut commands: Commands,
-) {
+fn disable_body_on_dead(add: On<Add, Dead>, q_body: Query<(), With<Body>>, mut commands: Commands) {
     let entity = add.entity;
     if !q_body.contains(entity) {
         return;
