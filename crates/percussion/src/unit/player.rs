@@ -23,11 +23,13 @@ use bevy_sprite3d::prelude::*;
 pub mod animation;
 
 use super::facing::Facing;
+use super::hitbox::Faction;
 use super::hurtbox::spawn_hurtbox;
 use super::movement::MoveVelocity;
 use super::{Body, DamageMessage, Dead, Health, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
 use crate::physics_layers::GameLayer;
+use crate::projectile::spawn_linear_projectile;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
 use animation::{PlayerAnimationPlugin, PlayerAnimationState};
 
@@ -146,7 +148,11 @@ impl Plugin for PlayerPlugin {
         #[cfg(debug_assertions)]
         app.add_systems(
             Update,
-            (debug_damage_player_on_space, debug_revive_player_on_r),
+            (
+                debug_damage_player_on_space,
+                debug_revive_player_on_r,
+                debug_fire_projectile_on_f,
+            ),
         );
     }
 }
@@ -336,5 +342,48 @@ fn debug_revive_player_on_r(
         health.current = health.max;
         // remove::<Dead>() 对没挂 Dead 的 entity 也安全 —— Bevy 静默忽略。
         commands.entity(entity).remove::<Dead>();
+    }
+}
+
+/// 按 `F` 发射一发匀速直线投射物 —— 绕开未来的技能 / 输入映射层，
+/// 直接验证投射物子系统打通（spawn → 飞行 → 命中 hurtbox / terrain →
+/// despawn）。方向取自 [`Facing`]：右 = +X，左 = -X。
+///
+/// 只在 debug build 编译。
+///
+/// `clippy::type_complexity`：跟 movement.rs 同款理由 —— Bevy Query 的类型
+/// 参数堆起来就是这副长相，已是项目惯例。
+#[cfg(debug_assertions)]
+#[allow(clippy::type_complexity)]
+fn debug_fire_projectile_on_f(
+    keys: Res<ButtonInput<KeyCode>>,
+    q_player: Query<(Entity, &Transform, &Facing), (With<Player>, Without<Dead>)>,
+    mut commands: Commands,
+) {
+    if !keys.just_pressed(KeyCode::KeyF) {
+        return;
+    }
+    for (entity, transform, facing) in &q_player {
+        // Facing 在动画 / 视觉层就是横向二值朝向；投射物方向直接 X 轴。
+        // 这里没经过 facing.rs 的 helper —— 那种 "Facing → Vec3" 是
+        // 视觉用语义（往哪边看），不一定等于"投射物速度方向"（未来
+        // 可能从角色手中往斜上方射出）。spawn 调用方明示更清楚。
+        let dir = match facing {
+            Facing::Right => Vec3::X,
+            Facing::Left => Vec3::NEG_X,
+        };
+        // 出膛位置：略前于角色，避免 spawn 当帧就命中自己（其实 hitbox
+        // 子系统的 owner 过滤已经会拦，但视觉上让它从身前飞出更自然）。
+        let origin = transform.translation + dir * 0.5;
+        let velocity = dir * 10.0; // 占位速度，调参等真出现远程攻击再说。
+        spawn_linear_projectile(
+            &mut commands,
+            entity,
+            Faction::Player,
+            origin,
+            velocity,
+            15.0, // 占位伤害
+            3.0,  // 占位寿命（秒）
+        );
     }
 }

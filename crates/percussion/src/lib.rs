@@ -23,6 +23,7 @@ use bevy::prelude::*;
 
 pub mod app_state;
 pub mod physics_layers;
+pub mod projectile;
 pub mod sprite_billboard;
 pub mod stage;
 pub mod unit;
@@ -81,6 +82,8 @@ impl Plugin for GamePlugin {
             unit::UnitPlugin,
             unit::movement::MovementPlugin,
             unit::hurtbox::HurtboxPlugin,
+            unit::hitbox::HitboxPlugin,
+            projectile::ProjectilePlugin,
             sprite_billboard::BillboardPlugin,
             // bevy_sprite3d：3D 场景里的 2D sprite（Delver / 饥荒风）通
             // 用支持。`Sprite3d` 在 PostUpdate 的 bundle_builder system 里
@@ -106,6 +109,7 @@ impl Plugin for GamePlugin {
         app.add_plugins((
             dev::grid::GridPlugin,
             dev::camera::CameraPlugin,
+            dev::physics_debug::PhysicsDebugPlugin,
             //dev::inspector::InspectorPlugin,
         ));
 
