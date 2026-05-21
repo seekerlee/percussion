@@ -36,6 +36,12 @@ use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_panorbit_camera::PanOrbitCamera;
 
 /// World inspector 插件。仅 debug 构建里被 [`GamePlugin`](crate::GamePlugin) 注册。
+///
+/// 当前在 `lib.rs` 里**临时未注册**（注释掉了 plugin 行）。保留 struct + impl 以便
+/// 想用时直接 uncomment 一行恢复，不必重写。`#[allow(dead_code)]` 仅是配合
+/// 这个"暂停加载"状态让 `-D warnings` 通过；恢复注册后此 attribute 可以保留
+/// 也可以删，没有副作用。
+#[allow(dead_code)]
 pub struct InspectorPlugin;
 
 impl Plugin for InspectorPlugin {
