@@ -46,7 +46,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use super::Body;
+use super::{Body, Dead};
 use crate::physics_layers::GameLayer;
 
 /// 重力加速度（米/秒²）。
@@ -106,7 +106,16 @@ impl Plugin for MovementPlugin {
 ///
 /// `OnGround` 时不累积，且如果 vy 还残留负值就强制清零，避免站立时被微小残
 /// 余速度往地里挤。Y 方向之外不动 —— 重力跟 XZ 速度正交。
-fn apply_gravity(time: Res<Time>, mut q: Query<(&mut MoveVelocity, &OnGround), With<Body>>) {
+///
+/// `Without<Dead>` 为了尸体不再被重力累积 Y 速度 —— 同是遵守 unit 模块顶部
+/// 那条全局约定；[`apply_movement`] 同样过滤，理由见那里。
+//
+// `clippy::type_complexity`：跟 [`apply_movement`] 同款，理由见那里。
+#[allow(clippy::type_complexity)]
+fn apply_gravity(
+    time: Res<Time>,
+    mut q: Query<(&mut MoveVelocity, &OnGround), (With<Body>, Without<Dead>)>,
+) {
     let dt = time.delta_secs();
     for (mut vel, grounded) in &mut q {
         if grounded.0 {
@@ -136,6 +145,18 @@ fn apply_gravity(time: Res<Time>, mut q: Query<(&mut MoveVelocity, &OnGround), W
 /// 所以"写 Transform.translation"就等同于"设置 avian 位置"。这是 avian 官方
 /// `examples/move_and_slide_3d.rs` 和 `examples/kinematic_character_3d/plugin.rs`
 /// 都在用的模式。
+///
+/// # 为什么要 `Without<Dead>`
+///
+/// 表面上仅是遵守 unit 模块顶部的全局约定，但对本 system 尤其重要：死亡时
+/// [`disable_body_on_dead`](super::disable_body_on_dead) 会给本 entity 挂
+/// [`ColliderDisabled`]，**别人**的 spatial query 就看不见这块 collider 了。但
+/// [`MoveAndSlide::move_and_slide`] 是拿本 entity 的 `Collider` 当 sweep 形状传进
+/// 去的普通函数，不看 `ColliderDisabled`；它内部的 `depenetrate` 一查，看到
+/// 别人（活的玩家）当前与本 entity 重叠（因为玩家 sweep 看不见 disabled
+/// collider，直接走进了尸体），就把**本 entity 自己**推开。视觉上是"尸体被玩
+/// 家推走"，实际是尸体自己跑这个 system + depenetration 把自己推开。锁这
+/// 条 filter 后尸体不再跑本 system，bug 从根上消失。
 //
 // `clippy::type_complexity`：Bevy Query 参数本来就由 5–7 个类型参数拼成，
 // clippy 默认阈值到一个稍复杂的 system 就会报。另折成 `type` 别名反而
@@ -152,7 +173,7 @@ fn apply_movement(
             &mut MoveVelocity,
             &mut OnGround,
         ),
-        With<Body>,
+        (With<Body>, Without<Dead>),
     >,
 ) {
     let config = MoveAndSlideConfig::default();
