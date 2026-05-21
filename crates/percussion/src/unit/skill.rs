@@ -11,61 +11,15 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
+// ============================================================================
+// 静态数据 —— 不挂 entity，描述"技能本身"的定义
+// ============================================================================
+
 /// Stable id for a skill definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SkillId {
     /// Basic one-shot melee slash.
     BasicMeleeSlash,
-}
-
-/// Which slot the caller wants to cast.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SkillSlot {
-    Basic,
-}
-
-/// Runtime skill slots carried by an entity.
-#[derive(Component, Debug, Clone)]
-pub struct Skills {
-    pub basic: Option<SkillId>,
-}
-
-impl Default for Skills {
-    fn default() -> Self {
-        Self {
-            basic: Some(SkillId::BasicMeleeSlash),
-        }
-    }
-}
-
-impl Skills {
-    pub fn get(&self, slot: SkillSlot) -> Option<SkillId> {
-        match slot {
-            SkillSlot::Basic => self.basic,
-        }
-    }
-}
-
-/// Per-entity cooldown table.
-#[derive(Component, Debug, Default, Clone)]
-pub struct SkillCooldowns {
-    pub remaining: HashMap<SkillId, f32>,
-}
-
-/// One-shot cast phases (channeling intentionally omitted).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SkillPhase {
-    Windup,
-    Active,
-    Recovery,
-}
-
-/// Current cast state attached to a caster entity.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct SkillCast {
-    pub skill_id: SkillId,
-    pub phase: SkillPhase,
-    pub phase_elapsed: f32,
 }
 
 /// Static tuning data for one skill.
@@ -108,11 +62,73 @@ fn definition(skill_id: SkillId) -> &'static SkillDefinition {
     }
 }
 
-/// Request to start casting a slot on an entity.
+// ============================================================================
+// 组件 —— 挂在 unit entity 上的运行时状态
+// ============================================================================
+
+/// Skills this unit knows / is allowed to cast.
+///
+/// 纯数据：一个 unit 拥有哪些技能。不涉及 UI 槽位 / 按键绑定 ——
+/// 那些是更外层的概念（出现需求时再加 `EquippedSkillSlots` 之类）。
+///
+/// 用 `Vec` 而不是 `HashSet`：技能数量天然很少（个位数），线性扫描比
+/// 哈希更快，也保留确定顺序便于调试。
+///
+/// 内部字段**不**公开 —— 外部只能通过 [`Skills::new`] 构造、`has` 查询。
+/// 这样将来：
+/// - 想在"加技能"时挂副作用（如初始化 cooldown、发 learned 消息）只改一处
+/// - 想换内部表示（`SmallVec` / `HashSet`）只改一处
+/// - 不会有人在 system 里写 `skills.0.push(...)` 绕过领域规则
+#[derive(Component, Debug, Default, Clone)]
+pub struct Skills(Vec<SkillId>);
+
+impl Skills {
+    /// 用一组初始技能造一个 `Skills`。
+    pub fn new(skills: Vec<SkillId>) -> Self {
+        Self(skills)
+    }
+
+    /// 该 unit 是否拥有这个技能。
+    pub fn has(&self, id: SkillId) -> bool {
+        self.0.contains(&id)
+    }
+}
+
+/// Per-entity cooldown table.
+#[derive(Component, Debug, Default, Clone)]
+pub struct SkillCooldowns {
+    pub remaining: HashMap<SkillId, f32>,
+}
+
+/// One-shot cast phases (channeling intentionally omitted).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillPhase {
+    Windup,
+    Active,
+    Recovery,
+}
+
+/// Current cast state attached to a caster entity.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct SkillCast {
+    pub skill_id: SkillId,
+    pub phase: SkillPhase,
+    pub phase_elapsed: f32,
+}
+
+// ============================================================================
+// 消息 —— 跨模块通信
+// ============================================================================
+
+/// Request to start casting a specific skill on an entity.
+///
+/// 直接带 `SkillId` —— 调用方（玩家输入层 / AI / 调试控制台）自己
+/// 决定要发哪个技能。没有 "slot" 这一层间接性，等真要做装备 / 按键
+/// 绑定 / UI 槽位时再在外面包一层。
 #[derive(Message, Debug, Clone, Copy)]
 pub struct CastSkillRequest {
     pub caster: Entity,
-    pub slot: SkillSlot,
+    pub skill_id: SkillId,
 }
 
 /// Fired once when a cast enters Active phase.
@@ -124,6 +140,10 @@ pub struct SkillActivatedMessage {
     pub skill_id: SkillId,
     pub effect: SkillEffectKind,
 }
+
+// ============================================================================
+// 插件 + 系统
+// ============================================================================
 
 /// Plugin skeleton for one-shot skill casting.
 pub struct SkillPlugin;
@@ -163,22 +183,29 @@ fn try_start_requested_casts(
             continue;
         };
         if cast.is_some() {
+            // 已经在施法中 —— 不打断、不排队。打断走未来的 CancelSkillRequest。
             continue;
         }
 
-        let Some(skill_id) = skills.get(req.slot) else {
+        // unit 必须"拥有"这个技能才能放 —— 防止 AI / 调试控制台请求一个
+        // unit 不会的技能。
+        if !skills.has(req.skill_id) {
             continue;
-        };
-        let def = definition(skill_id);
+        }
 
-        let left = cooldowns.remaining.get(&skill_id).copied().unwrap_or(0.0);
+        let def = definition(req.skill_id);
+        let left = cooldowns
+            .remaining
+            .get(&req.skill_id)
+            .copied()
+            .unwrap_or(0.0);
         if left > 0.0 {
             continue;
         }
 
-        cooldowns.remaining.insert(skill_id, def.cooldown);
+        cooldowns.remaining.insert(req.skill_id, def.cooldown);
         commands.entity(req.caster).insert(SkillCast {
-            skill_id,
+            skill_id: req.skill_id,
             phase: SkillPhase::Windup,
             phase_elapsed: 0.0,
         });
