@@ -22,6 +22,7 @@ use bevy_sprite3d::prelude::*;
 
 pub mod animation;
 
+use super::facing::Facing;
 use super::hurtbox::spawn_hurtbox;
 use super::movement::MoveVelocity;
 use super::{Body, DamageMessage, Dead, Health, UNIT_BODY_HEIGHT, Unit};
@@ -111,6 +112,7 @@ pub struct PlayerAssets {
     Body,
     Health = Health::new(PLAYER_MAX_HEALTH),
     PlayerAnimationState,
+    Facing,
 )]
 pub struct Player;
 

@@ -22,6 +22,8 @@
 //!   代码的默认行为。飞行 / 灵体单位**不带**这个 marker。
 //! - [`UNIT_BODY_HEIGHT`]：所有 ground unit 共享的 capsule body 总高度常量，
 //!   避免不同半径 unit 互推时 Y 方向抖动。
+//! - [`facing::Facing`]：单位朝向 component（左 / 右），驱动 sprite
+//!   水平镜像，将来供 AI / 技能 / 受击反馈共用。
 //! - [`movement`]：Kinematic 移动子系统 —— sweep-and-slide + 重力 + 落地。
 //!   提供 [`MoveVelocity`](movement::MoveVelocity) 让"想往哪走"的来源（玩家
 //!   输入、AI、击飞……）有地方写。
@@ -289,6 +291,8 @@ fn reenable_body_on_revive(
 // ============================================================================
 
 pub mod dragon1;
+pub mod facing;
+pub mod hitbox;
 pub mod hurtbox;
 pub mod movement;
 pub mod player;
