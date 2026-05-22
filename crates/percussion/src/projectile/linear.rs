@@ -18,7 +18,7 @@
 //! 命中 hurtbox 这条线之所以**不**走本模块，是因为投射物 entity 本身就是
 //! 一块 hitbox（见 [`super`] 模块文档），hitbox 子系统通过 sensor +
 //! `CollidingEntities` 已经检测好"哪些 hurtbox 跟我重叠"并发了
-//! `DamageMessage`，再在轨迹模块重做一次反而割裂。
+//! `CollisionMessage`，再在轨迹模块重做一次反而割裂。
 //!
 //! # 撞墙判定为什么归轨迹模块
 //!

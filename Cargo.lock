@@ -4558,6 +4558,7 @@ dependencies = [
  "bevy_asset_loader",
  "bevy_panorbit_camera",
  "bevy_sprite3d",
+ "fastrand",
 ]
 
 [[package]]

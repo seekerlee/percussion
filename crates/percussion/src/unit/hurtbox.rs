@@ -60,9 +60,9 @@
 //! # 命中结算还没接入
 //!
 //! 本模块只把"hurtbox 这块数据 + 物理 sensor"立起来；真正的"hitbox sensor 命中
-//! hurtbox sensor → 发 [`DamageMessage`](super::DamageMessage)"通路要等 hitbox
-//! 子系统加进来再写（见 `doc/game-design.md`）。`HurtboxPlugin` 现在只是
-//! placeholder，等命中 system 落地时往里加。
+//! hurtbox sensor → 发 [`CollisionMessage`](super::hitbox::CollisionMessage)"通路由 hitbox
+//! 子系统提供（见 [`super::hitbox`]）。`HurtboxPlugin` 现在只是
+//! placeholder，将来要加"target-side 修正"的 system 时在这里纳。
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -135,12 +135,9 @@ pub fn spawn_hurtbox(
 /// HurtboxPlugin —— hurtbox 子系统的注册点。
 ///
 /// 现在是空的：hurtbox 本身没有需要每帧跑的逻辑，[`spawn_hurtbox`] 是按需调用
-/// 的工具函数。等 hitbox 子系统接入、要写"hitbox 命中 hurtbox → 发
-/// [`DamageMessage`](super::DamageMessage)" 的 system 时，统一注册到这里。
-///
-/// 把空 plugin 留出来不是"为扩展而扩展"，而是匹配项目里其他子系统（player /
-/// dragon1 / movement 都各有 plugin）的注册模式 —— 等加 system 时不用再回头
-/// 改 `lib.rs` 的 plugin 元组。
+/// 的工具函数。将来加"target-side modifier"（armor reduction 等）时，在
+/// [`damage_calc`](super::damage_calc) 中读 hurtbox / target 的补代数据，对应的
+/// data 组件可以挂到 hurtbox 这边；本 plugin 到那时再丰富。
 pub struct HurtboxPlugin;
 
 impl Plugin for HurtboxPlugin {

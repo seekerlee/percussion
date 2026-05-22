@@ -27,8 +27,8 @@
 //! - [`movement`]：Kinematic 移动子系统 —— sweep-and-slide + 重力 + 落地。
 //!   提供 [`MoveVelocity`](movement::MoveVelocity) 让"想往哪走"的来源（玩家
 //!   输入、AI、击飞……）有地方写。
-//! - [`DamageMessage`] / [`UnitDiedMessage`]：受伤 / 死亡的消息总线
-//! - model-side system：[`apply_damage_messages`] + [`transition_to_dead`]
+//! - [`DamageDealtMessage`] / [`UnitDiedMessage`]：伤害结算 / 死亡的消息总线
+//! - model-side system：[`damage_calc`] / [`hit_triggers`] / [`transition_to_dead`]
 //! - lifecycle observer：[`disable_body_on_dead`] + [`reenable_body_on_revive`]
 //!
 //! # 全局约定：`Without<Dead>` filter
@@ -152,18 +152,47 @@ pub const UNIT_BODY_HEIGHT: f32 = 2.0;
 #[require(MoveVelocity, OnGround)]
 pub struct Body;
 
-/// 给 unit 造成伤害的消息 —— 任何"伤害源"（近战、投射物、debuff tick、
-/// 坠落等）都往这里写，[`apply_damage_messages`] 消费它来扣血。
+/// 角色的"攻击力"系数 —— 让 hitbox spawn 时把 caster 的整体输出系数烧
+/// 进 [`hitbox::HitSpec`] 的 modifier 流水线里（详见
+/// [`skill_hitbox`](crate::unit::skill_hitbox) 的 bridge system）。
 ///
-/// 用 [`Message`] 而不是直接改 [`Health`] 是为了**让伤害汇集到一个 system
-/// 里处理**：将来要加伤害修正（护甲、易伤、闪避、暴击）只需要改一个
-/// 地方；伤害源 system 只负责"我攻击了谁、攻击多少"，不关心结算细节。
+/// 这是个**示例性**的 caster-side 通用 stat —— 真正决定一个角色"打多痛"
+/// 的远不止这一个 stat（武器加成、状态加成、buff、暴击率……）。目前
+/// 只用 `Strength` 一项是为了：
+///
+/// 1. 验证"caster-side 在 spawn 时就把所有自身修正烧进 spec"这条架构原则；
+/// 2. 让 Player 跟 Dragon 走同一条流水线，参与同样的 damage 计算。
+///
+/// 缺席视为 1.0（无加成）。
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Strength(pub f32);
+
+/// 一次完整命中**结算后**发出的消息 —— [`damage_calc`] 跑完 modifier 流水线、
+/// 把最终伤害写入目标 [`Health`] 之后发。
+///
+/// 用它做下游 hook：trigger 派发（[`hit_triggers`]，吸血 / 暴击衍生效果）、
+/// 飘字 UI、击杀统计、AI 仇恨表。
+///
+/// 替代了旧版的 `DamageMessage` —— 旧消息是"我请求扣血"，本消息是"血
+/// 已经扣完了"。语义反转：从"伤害源声明"→"权威结算结果"，后段 system
+/// 拿到就直接用，不用再担心 race / 重复结算。
 #[derive(Message, Debug, Clone, Copy)]
-pub struct DamageMessage {
+pub struct DamageDealtMessage {
+    /// 攻击发起者（hitbox.owner）。trigger 系统需要它来回写 caster
+    /// （吸血加血）。
+    pub caster: Entity,
     /// 受伤的 entity。
     pub target: Entity,
-    /// 伤害数值（在到达 [`apply_damage_messages`] 时已是最终值）。
-    pub amount: f32,
+    /// 触发本次结算的 hitbox entity —— 让 trigger 系统可以反查
+    /// [`hitbox::HitSpec::triggers`]。hitbox 可能在同一帧已被 despawn
+    /// （短 lifetime），消费方需用 `q.get(hitbox).ok()` 优雅处理 miss。
+    pub hitbox: Entity,
+    /// 最终扣掉的血量（被 `(current - amount).max(0.0)` clamp 之前的值；
+    /// 吸血等比例 trigger 应该按这个算）。
+    pub final_amount: f32,
+    /// 这次结算 modifier 流水线是否触发了暴击。`CritOnly` trigger 用它
+    /// 判定是否启动条件分支。
+    pub is_crit: bool,
 }
 
 /// Unit 死亡通知 —— [`transition_to_dead`] 给某个 unit 挂上 [`Dead`] marker
@@ -178,6 +207,37 @@ pub struct UnitDiedMessage {
     pub entity: Entity,
 }
 
+/// Damage pipeline 的执行阶段 —— 用 [`SystemSet`] 把跨模块的 system 排
+/// 成一条流水线，单点定义顺序，比每个 system 各自 `.before()/.after()`
+/// 链清晰得多。
+///
+/// 设计哲学："hitbox 命中→伤害结算→trigger 派发→死亡转移" 是一条逻辑
+/// 上不可乱序的流水线。每段产物喂下一段消费，并发性能不是这里的瓶颈
+/// （单帧整条 < 1ms），所以**顺序优先于并发**。
+///
+/// 各 set 由对应 module 自家 plugin 把自己的 system 塞进去；本模块只
+/// 负责"把这 5 个 set 排成一条链"。新增阶段在这里加一个变体，并在
+/// `chain()` 元组里放到正确位置即可。
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DamagePipeline {
+    /// [`hitbox`] 扫物理 sensor，把命中翻译成
+    /// [`CollisionMessage`](hitbox::CollisionMessage)。
+    DetectCollision,
+    /// [`damage_calc`] 跑 modifier 流水线，把最终伤害扣到
+    /// [`Health`]，发 [`DamageDealtMessage`]。
+    ApplyDamage,
+    /// [`hit_triggers`] 按 [`DamageDealtMessage`] 派发 per-hit triggers
+    /// （吸血 / 衍生效果），可能进一步修改 caster / target 状态。
+    Triggers,
+    /// [`burning`] 等"持续 debuff tick"模块跑自己的周期性扣血 ——
+    /// 跟 per-hit trigger 区分开（trigger 是"一次命中触发的副作用"，
+    /// 持续 debuff 是"已存在的状态每帧 tick"）。
+    PersistentEffects,
+    /// 本模块的 [`transition_to_dead`] —— 扫 Health 归零的，挂 Dead。
+    /// 必须放最后：让本帧所有扣血来源（pipeline + DoT）都结算完才判死。
+    Transition,
+}
+
 /// Unit 插件 —— 注册 Health / Dead 相关的数据通路。
 ///
 /// 目前不提供任何视觉表现；视图层（血条、死亡动画、受击闪烁）由各自的
@@ -186,35 +246,32 @@ pub struct UnitPlugin;
 
 impl Plugin for UnitPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<DamageMessage>()
+        app.add_message::<DamageDealtMessage>()
             .add_message::<UnitDiedMessage>()
-            // 顺序：先把所有伤害结算到 Health，再判定谁死了。
-            // 否则同一帧"挨打致死"会被推迟一帧才进入 Dead 状态。
-            .add_systems(Update, (apply_damage_messages, transition_to_dead).chain())
+            // 把整条 damage pipeline 的 5 个 set 串成一条链。各 set 内部
+            // 由对应 module 的 plugin 自家 system 填充。`chain()` 让相
+            // 邻 set 之间满足 happens-before。
+            .configure_sets(
+                Update,
+                (
+                    DamagePipeline::DetectCollision,
+                    DamagePipeline::ApplyDamage,
+                    DamagePipeline::Triggers,
+                    DamagePipeline::PersistentEffects,
+                    DamagePipeline::Transition,
+                )
+                    .chain(),
+            )
+            .add_systems(
+                Update,
+                transition_to_dead.in_set(DamagePipeline::Transition),
+            )
             // 用 observer（而不是 `Added<Dead>` 的 schedule 内 query）是
             // 为了**同帧响应** —— `transition_to_dead` 通过 Commands insert
             // `Dead`，commands 在 schedule 边界才 flush；observer 在 flush
             // 那一刻原生触发，不依赖 query 跨帧轮询。
             .add_observer(disable_body_on_dead)
             .add_observer(reenable_body_on_revive);
-    }
-}
-
-/// 消费 [`DamageMessage`]，扣减目标的 [`Health::current`]。
-///
-/// `Without<Dead>` —— 死人不再受伤（避免重复死亡通知、避免负血溢出）。
-/// 如果想做"死后追杀斩"之类效果，那是另一条 message 路径，不走这里。
-fn apply_damage_messages(
-    mut messages: MessageReader<DamageMessage>,
-    mut q_health: Query<&mut Health, Without<Dead>>,
-) {
-    for msg in messages.read() {
-        let Ok(mut health) = q_health.get_mut(msg.target) else {
-            // target 已死、不存在、或者根本没有 Health —— 静默忽略。
-            // 上游不应假设伤害一定命中（attack 发出去到结算之间可能很多帧）。
-            continue;
-        };
-        health.current = (health.current - msg.amount).max(0.0);
     }
 }
 
@@ -286,8 +343,11 @@ fn reenable_body_on_revive(
 // 声明即可。
 // ============================================================================
 
+pub mod burning;
+pub mod damage_calc;
 pub mod dragon1;
 pub mod facing;
+pub mod hit_triggers;
 pub mod hitbox;
 pub mod hurtbox;
 pub mod movement;

@@ -23,8 +23,9 @@ use bevy_sprite3d::prelude::*;
 pub mod animation;
 
 use animation::{Dragon1AnimationPlugin, Dragon1AnimationState};
+use super::hitbox::Faction;
 use super::hurtbox::spawn_hurtbox;
-use super::{Body, Health, UNIT_BODY_HEIGHT, Unit};
+use super::{Body, Health, Strength, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
 use crate::physics_layers::GameLayer;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
@@ -126,6 +127,12 @@ pub fn spawn_dragon1(
     let entity = commands
         .spawn((
             Dragon1,
+            // 阵营 + caster-side 输出系数 —— 跟 [`Player`](super::player::Player)
+            // 保持对称，以便未来 dragon 会攻击时 hitbox 能走同一条
+            // pipeline。现阶段仅 hurtbox 被动受击也不用它们，但提前挂着
+            // 免得加 AI 时再漏东西。
+            Faction::Enemy,
+            Strength(1.0),
             Transform::from_translation(local_pos),
             // 同 [`spawn_player`](super::player::spawn_player)：父 entity 不渲染，
             // 但 sprite 子 entity 带 `Visibility`，需要父级也有以构成完整

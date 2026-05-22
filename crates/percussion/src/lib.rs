@@ -83,6 +83,14 @@ impl Plugin for GamePlugin {
             unit::movement::MovementPlugin,
             unit::hurtbox::HurtboxPlugin,
             unit::hitbox::HitboxPlugin,
+            // Damage pipeline 的 3 个新阶段插件 —— UnitPlugin 已经在
+            // `DamagePipeline` set 上拉好链；这里只是把 system 塞进对应 set。
+            // 注册顺序无关（set 之间的 happens-before 由 chain() 决定），按
+            // pipeline 流水顺序排只是为了阅读时容易看出"先 detect → 算 dmg →
+            // 派 trigger → tick DoT → 判死"。
+            unit::damage_calc::DamageCalcPlugin,
+            unit::hit_triggers::HitTriggersPlugin,
+            unit::burning::BurningPlugin,
             unit::skill::SkillPlugin,
             unit::skill_hitbox::SkillHitboxPlugin,
             projectile::ProjectilePlugin,

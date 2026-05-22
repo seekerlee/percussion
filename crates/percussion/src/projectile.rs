@@ -5,7 +5,8 @@
 //! 远程攻击（火球、箭、闪电矢……）的本质是"一块带伤害判定的形状沿轨迹
 //! 飞行、撞到东西就触发命中"。拆开来看是三件正交的事：
 //!
-//! 1. **作为攻击体**：判定盒、阵营、自伤过滤、命中发 [`DamageMessage`]
+//! 1. **作为攻击体**：判定盒、阵营、自伤过滤、命中发
+//!    [`CollisionMessage`](crate::unit::hitbox::CollisionMessage)（由 hitbox 子系统发）
 //! 2. **轨迹**：每帧"该往哪移动多少"（直线、抛物线、追踪……）
 //! 3. **寿命**：何时消失（命中、超时、撞墙）
 //!
@@ -48,7 +49,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::unit::hitbox::{Faction, HitboxHits, spawn_hitbox};
+use crate::unit::hitbox::{Faction, HitSpec, HitboxHits, spawn_hitbox};
 
 pub mod linear;
 
@@ -112,7 +113,15 @@ pub fn spawn_linear_projectile(
         faction,
         Collider::sphere(PROJECTILE_RADIUS),
         Transform::from_translation(position),
-        damage,
+        // 调试发射键只传裸伤害 —— 理论上未来这里也该读 caster.Strength
+        // 等烙进 modifiers，但当前 caller 是 debug 键不关心 caster-side
+        // 修正，保持接口简单。未来有正式技能的远程技时这里会改成
+        // 接受 `HitSpec` 参数，跟 skill_hitbox 一样烙好后带进来。
+        HitSpec {
+            base_damage: damage,
+            modifiers: Vec::new(),
+            triggers: Vec::new(),
+        },
         lifetime,
     );
     commands
@@ -155,12 +164,14 @@ impl Plugin for ProjectilePlugin {
 /// "命中即销毁"规则：扫所有 [`Projectile`]，发现已经命中过至少一个目标
 /// 就 despawn 自身。
 ///
-/// 为什么读 `HitboxHits.already_hit` 而不是订阅 [`DamageMessage`]：
+/// 为什么读 `HitboxHits.already_hit` 而不是订阅
+/// [`CollisionMessage`](crate::unit::hitbox::CollisionMessage) /
+/// [`DamageDealtMessage`](crate::unit::DamageDealtMessage)：
 ///
-/// - `DamageMessage` 是给生命系统消费的，不带 hitbox entity id；订阅它
-///   还要反查"哪发投射物干的"
-/// - `HitboxHits` 是 hitbox 子系统给每块 hitbox 记的"我命中过谁"，**直接**
-///   就是本系统要的信号
+/// - 那些是给下游结算 / trigger 系统消费的，订阅他们还要反查"哪发
+///   投射物干的"。
+/// - `HitboxHits` 是 hitbox 子系统给每块 hitbox 记的"我命中过谁"，
+///   **直接**就是本系统要的信号。
 ///
 /// 跟近战 hitbox 区分：近战 hitbox 也会写 `HitboxHits`，但**没有**
 /// [`Projectile`] marker，本 query 不命中它们 —— 近战靠 lifetime 自然到期
