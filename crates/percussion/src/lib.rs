@@ -66,6 +66,25 @@ impl Plugin for GamePlugin {
             primary_window: Some(Window {
                 title: "Percussion".into(),
                 resolution: (1280u32, 720u32).into(),
+                // FifoRelaxed：准时帧按 vsync present（限帧到刷新率、不撕
+                // 裂），但**错过 vsync 的迟到帧立刻 present**（容许那一帧撕
+                // 裂）而不是等下一个 vsync。正好覆盖本项目踩到的两个坑：
+                //
+                // 1. `Fifo`（默认 `AutoVsync` 在 NVIDIA Vulkan 上实测 fallback
+                //    到的就是 Fifo）：另一屏全屏视频时，DWM 合成抖动让单帧
+                //    present 超 16.67ms，Fifo 强制等下一个 vsync = 33.3ms =
+                //    周期性掉到 30fps。
+                // 2. `Mailbox`：完全不限帧，focused 时 800+fps、GPU/CPU 满载
+                //    烧电，对屏幕没意义（多余帧全丢）。
+                //
+                // FifoRelaxed 同时拿到 Fifo 的省电 + Mailbox 的抗 stall。代
+                // 价：迟到帧那一瞬可能撕裂，但发生频率低、视觉几乎不可见；
+                // G-Sync / FreeSync 显示器下完全不撕裂。
+                //
+                // 不用 `AutoVsync` 显式写死的原因：`AutoVsync` 的 fallback 顺
+                // 序是 FifoRelaxed → Fifo，但驱动 / wgpu 版本组合下实际选哪
+                // 个不可靠（实测会跑到 Fifo）。显式指定排除歧义。
+                present_mode: bevy::window::PresentMode::FifoRelaxed,
                 ..default()
             }),
             ..default()
