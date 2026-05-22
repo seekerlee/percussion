@@ -12,8 +12,17 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 
 // ============================================================================
-// 静态数据 —— 不挂 entity，描述"技能本身"的定义
+// 静态数据 —— 模板（template）：spawn 时拷给 caster 作为初始值
 // ============================================================================
+//
+// 设计要点：**全局 const 只是模板**。每个 caster 通过 [`SkillBook`] 拥有
+// 自己**已实例化**的 [`SkillDefinition`]。换武器 / 上 buff / 升级招式
+// 都直接修改 caster 的 SkillBook，不动模板。
+//
+// 这样：
+// - 桥接 system 只需查 SkillBook 一处，不必 join 多个组件聚合数值
+// - 不同 caster 拿不同武器 → 同一 SkillId 数值自然不同
+// - 模板代码常量保留 "默认手感" 的可读性
 
 /// Stable id for a skill definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -22,7 +31,9 @@ pub enum SkillId {
     BasicMeleeSlash,
 }
 
-/// Static tuning data for one skill.
+/// Tuning data for one skill.
+///
+/// 模板（const）和 caster 实例（[`SkillBook`] 内的 value）共用同一形状。
 #[derive(Debug, Clone, Copy)]
 pub struct SkillDefinition {
     pub cooldown: f32,
@@ -33,32 +44,99 @@ pub struct SkillDefinition {
 }
 
 /// Effect payload emitted on activation.
+///
+/// 字段命名走 **caster-relative 语义**而不是世界坐标 `width / depth / height`，
+/// 因为命中盒会跟着 [`Facing`](super::facing::Facing) 旋转 —— 用世界轴命名
+/// 在 `Facing::Left` 时所有"沿 X 轴"的字段语义都翻一遍，让人糊涂。
 #[derive(Debug, Clone, Copy)]
 pub enum SkillEffectKind {
+    /// 一块**贴在 caster 身前**的长方体判定盒，跟着 [`Facing`] 转向。
+    ///
+    /// 几何约定（俯视图，caster 朝 +X 时）：
+    ///
+    /// ```text
+    ///       +Z ↑
+    ///          │             ┌──────────────┐ ← center.z + swing/2
+    ///          │             │              │
+    ///   ── ● ──┼─────────────┤   MeleeBox   ├──→ +X (facing)
+    ///      P   │             │      ●       │
+    ///          │             └──────────────┘ ← center.z - swing/2
+    ///          │             ↑      ↑       ↑
+    ///          │ ←─ off.x ──→│   center      │
+    ///          │             ←──── reach ───→
+    /// ```
+    ///
+    /// Y 方向的 box 中心默认贴 caster 中心；想做"扫腿" / "高位斩"再加 `offset_y`。
     MeleeBox {
-        width: f32,
-        depth: f32,
-        forward_offset: f32,
-        damage: f32,
+        /// 沿 facing 方向的全长 —— **攻击够多远**（剑的长度 / 体术伸臂）。
+        reach: f32,
+        /// 垂直 facing 方向的全长 —— **横扫多宽**（横扫 vs 直刺）。
+        swing: f32,
+        /// Y 方向全长 —— **罩多高**（罩住整个人 vs 扫腿低位）。
+        height: f32,
+        /// caster 中心 → box 中心 的位移，**caster 平面内**。
+        ///
+        /// - `x`：沿 facing（正 = 朝前）。`x == reach/2` 时 box 近边贴 caster 体表。
+        /// - `y`：垂直 facing（正 = facing 左手侧）。绝大多数招式 = 0，
+        ///   非零用于"侧击" / 不对称挥砍。
+        ///
+        /// 用 `Vec2` 而不是 `Vec3`：Y 方向偏移目前没用上，等真做"扫腿"再补。
+        offset: Vec2,
+        /// 命中后果（伤害 / buff / 击退 …）的**声明性描述**。
+        ///
+        /// 见 [`HitSpec`] —— 桥接 system 会把它翻译成 spawn 出来的 hitbox
+        /// entity 上的一组 `OnHit-*` 组件，每种组件由独立的 handler system
+        /// 处理。这样：
+        /// - 简单效果（damage）= 加字段
+        /// - 复杂效果（命中给自己 buff、命中爆炸）= 加字段 + 1 component + 1 system，
+        ///   彼此互不污染
+        on_hit: HitSpec,
     },
 }
 
-const BASIC_MELEE_SLASH_DEF: SkillDefinition = SkillDefinition {
+/// 命中一次的全部后果，声明式。
+///
+/// 桥接层读取这里的字段，按需在 spawn 的 hitbox entity 上挂对应 `OnHit-*`
+/// 组件；handler system 监听 hitbox 与 hurtbox 的碰撞事件按组件分别处理。
+///
+/// 现在只有 `damage`，未来加字段（all `Option<...>` 或非 `Option` 默认值）：
+/// ```ignore
+/// pub struct HitSpec {
+///     pub damage: f32,
+///     pub self_buff: Option<BuffId>,        // 命中给 caster 加 buff
+///     pub target_debuff: Option<DebuffId>,  // 命中给 victim 加 debuff
+///     pub knockback: Option<KnockbackSpec>,
+///     pub lifesteal_ratio: f32,             // 0.0 = 无
+/// }
+/// ```
+/// 加新字段时**只动这里 + 桥接 + 1 个 handler system**，skill 状态机不受影响。
+#[derive(Debug, Clone, Copy)]
+pub struct HitSpec {
+    /// 一次命中造成的伤害（已是最终值 —— 已被武器 / buff 调过）。
+    pub damage: f32,
+}
+
+const BASIC_MELEE_SLASH_TEMPLATE: SkillDefinition = SkillDefinition {
     cooldown: 0.45,
     windup: 0.10,
     active: 0.05,
     recovery: 0.15,
     effect: SkillEffectKind::MeleeBox {
-        width: 1.2,
-        depth: 1.4,
-        forward_offset: 0.7,
-        damage: 12.0,
+        reach: 1.4,
+        swing: 1.2,
+        // 1.8 = 默认站立 unit body 高度，整个人罩住。等做"扫腿" / "高位斩"
+        // 这种 Y 上有差异的招式时再调小 + 配合 box 中心 Y 偏移（暂未实现）。
+        height: 1.8,
+        // x = reach/2 + 0.0：box 近边正好贴 caster 体表。
+        offset: Vec2::new(0.7, 0.0),
+        on_hit: HitSpec { damage: 12.0 },
     },
 };
 
-fn definition(skill_id: SkillId) -> &'static SkillDefinition {
+/// 取一个技能的默认模板（spawn 时拷一份进 [`SkillBook`]）。
+fn template(skill_id: SkillId) -> &'static SkillDefinition {
     match skill_id {
-        SkillId::BasicMeleeSlash => &BASIC_MELEE_SLASH_DEF,
+        SkillId::BasicMeleeSlash => &BASIC_MELEE_SLASH_TEMPLATE,
     }
 }
 
@@ -66,31 +144,43 @@ fn definition(skill_id: SkillId) -> &'static SkillDefinition {
 // 组件 —— 挂在 unit entity 上的运行时状态
 // ============================================================================
 
-/// Skills this unit knows / is allowed to cast.
+/// Per-caster **instantiated** skill definitions.
 ///
-/// 纯数据：一个 unit 拥有哪些技能。不涉及 UI 槽位 / 按键绑定 ——
-/// 那些是更外层的概念（出现需求时再加 `EquippedSkillSlots` 之类）。
+/// 同时回答两件事：
+/// - "这个 unit 会哪些技能"（key 存在性）
+/// - "这个 unit 的这招长什么样"（value —— 已被武器 / buff / 升级修改过的实例）
 ///
-/// 用 `Vec` 而不是 `HashSet`：技能数量天然很少（个位数），线性扫描比
-/// 哈希更快，也保留确定顺序便于调试。
+/// **内部用 `Vec` 不是 `HashMap`**：一个 unit 通常 ≤ 10 个技能，线性扫描
+/// 比哈希更快，cache 也友好，调试时按"学习顺序"保留也方便。
 ///
-/// 内部字段**不**公开 —— 外部只能通过 [`Skills::new`] 构造、`has` 查询。
-/// 这样将来：
-/// - 想在"加技能"时挂副作用（如初始化 cooldown、发 learned 消息）只改一处
-/// - 想换内部表示（`SmallVec` / `HashSet`）只改一处
-/// - 不会有人在 system 里写 `skills.0.push(...)` 绕过领域规则
+/// 字段不公开 —— 外部只能通过下面的方法操作。这样：
+/// - 将来"学会新技能"想挂副作用（初始化 cooldown、发 learned 消息）只改一处
+/// - 武器换装统一走 [`SkillBook::get_mut`]，不会有人绕过去手动塞数据
 #[derive(Component, Debug, Default, Clone)]
-pub struct Skills(Vec<SkillId>);
+pub struct SkillBook {
+    defs: Vec<(SkillId, SkillDefinition)>,
+}
 
-impl Skills {
-    /// 用一组初始技能造一个 `Skills`。
-    pub fn new(skills: Vec<SkillId>) -> Self {
-        Self(skills)
+impl SkillBook {
+    /// 用一组初始技能造一个 `SkillBook`，每个 skill 拷一份默认 [`template`]。
+    pub fn new(initial: impl IntoIterator<Item = SkillId>) -> Self {
+        let defs = initial.into_iter().map(|id| (id, *template(id))).collect();
+        Self { defs }
     }
 
     /// 该 unit 是否拥有这个技能。
     pub fn has(&self, id: SkillId) -> bool {
-        self.0.contains(&id)
+        self.defs.iter().any(|(i, _)| *i == id)
+    }
+
+    /// 读这个 unit 当前的这招数据（含武器 / buff 后的最终值）。
+    pub fn get(&self, id: SkillId) -> Option<&SkillDefinition> {
+        self.defs.iter().find(|(i, _)| *i == id).map(|(_, d)| d)
+    }
+
+    /// 改这个 unit 的这招数据（换武器 / 上 buff 走这里）。
+    pub fn get_mut(&mut self, id: SkillId) -> Option<&mut SkillDefinition> {
+        self.defs.iter_mut().find(|(i, _)| *i == id).map(|(_, d)| d)
     }
 }
 
@@ -175,11 +265,11 @@ fn tick_skill_cooldowns(time: Res<Time>, mut q: Query<&mut SkillCooldowns>) {
 
 fn try_start_requested_casts(
     mut requests: MessageReader<CastSkillRequest>,
-    mut q_caster: Query<(&Skills, &mut SkillCooldowns, Option<&SkillCast>)>,
+    mut q_caster: Query<(&SkillBook, &mut SkillCooldowns, Option<&SkillCast>)>,
     mut commands: Commands,
 ) {
     for req in requests.read() {
-        let Ok((skills, mut cooldowns, cast)) = q_caster.get_mut(req.caster) else {
+        let Ok((book, mut cooldowns, cast)) = q_caster.get_mut(req.caster) else {
             continue;
         };
         if cast.is_some() {
@@ -187,13 +277,12 @@ fn try_start_requested_casts(
             continue;
         }
 
-        // unit 必须"拥有"这个技能才能放 —— 防止 AI / 调试控制台请求一个
-        // unit 不会的技能。
-        if !skills.has(req.skill_id) {
+        // 必须"拥有"这个技能才能放 —— 防止 AI / 调试控制台请求一个
+        // unit 不会的技能。同时 def 也从这里取（caster 的实例值，不是模板）。
+        let Some(def) = book.get(req.skill_id) else {
             continue;
-        }
+        };
 
-        let def = definition(req.skill_id);
         let left = cooldowns
             .remaining
             .get(&req.skill_id)
@@ -214,17 +303,23 @@ fn try_start_requested_casts(
 
 fn tick_active_casts(
     time: Res<Time>,
-    mut q_cast: Query<(Entity, &mut SkillCast)>,
+    mut q_cast: Query<(Entity, &SkillBook, &mut SkillCast)>,
     mut activated: MessageWriter<SkillActivatedMessage>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
 
-    for (caster, mut cast) in &mut q_cast {
+    for (caster, book, mut cast) in &mut q_cast {
+        // 取 caster 实例化后的 def —— 若中途技能被移除（理论上不该发生）就清理。
+        let Some(def) = book.get(cast.skill_id).copied() else {
+            commands.entity(caster).remove::<SkillCast>();
+            continue;
+        };
+
         cast.phase_elapsed += dt;
 
         loop {
-            let phase_duration = current_phase_duration(*cast);
+            let phase_duration = phase_duration(&def, cast.phase);
             if cast.phase_elapsed < phase_duration {
                 break;
             }
@@ -233,7 +328,6 @@ fn tick_active_casts(
             match cast.phase {
                 SkillPhase::Windup => {
                     cast.phase = SkillPhase::Active;
-                    let def = definition(cast.skill_id);
                     activated.write(SkillActivatedMessage {
                         caster,
                         skill_id: cast.skill_id,
@@ -252,9 +346,8 @@ fn tick_active_casts(
     }
 }
 
-fn current_phase_duration(cast: SkillCast) -> f32 {
-    let def = definition(cast.skill_id);
-    match cast.phase {
+fn phase_duration(def: &SkillDefinition, phase: SkillPhase) -> f32 {
+    match phase {
         SkillPhase::Windup => def.windup,
         SkillPhase::Active => def.active,
         SkillPhase::Recovery => def.recovery,

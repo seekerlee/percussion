@@ -292,3 +292,5 @@ pub mod hitbox;
 pub mod hurtbox;
 pub mod movement;
 pub mod player;
+pub mod skill;
+pub mod skill_hitbox;

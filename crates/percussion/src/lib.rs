@@ -83,6 +83,8 @@ impl Plugin for GamePlugin {
             unit::movement::MovementPlugin,
             unit::hurtbox::HurtboxPlugin,
             unit::hitbox::HitboxPlugin,
+            unit::skill::SkillPlugin,
+            unit::skill_hitbox::SkillHitboxPlugin,
             projectile::ProjectilePlugin,
             sprite_billboard::BillboardPlugin,
             // bevy_sprite3d：3D 场景里的 2D sprite（Delver / 饥荒风）通

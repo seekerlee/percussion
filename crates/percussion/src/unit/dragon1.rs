@@ -127,6 +127,10 @@ pub fn spawn_dragon1(
         .spawn((
             Dragon1,
             Transform::from_translation(local_pos),
+            // 同 [`spawn_player`](super::player::spawn_player)：父 entity 不渲染，
+            // 但 sprite 子 entity 带 `Visibility`，需要父级也有以构成完整
+            // 继承链，否则报 B0004。
+            Visibility::default(),
             // Kinematic 刚体：跟 player 同模式（见 `unit/movement.rs` 顶部
             // 文档）。dragon1 还没 AI，`MoveVelocity` 默认 (0,0,0)，唯一
             // 不为零的来源是重力 —— spawn 在空中 → 自然落地 → on_ground

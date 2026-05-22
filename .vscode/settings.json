@@ -10,6 +10,12 @@
     "rust-analyzer.cargo.features": "all",
     // Don't run `cargo check` while typing — saves CPU on a Bevy-sized graph.
     "rust-analyzer.checkOnSave": true,
+    // 关掉 "unlinked-file" 诊断：写新模块时常先建文件再补 `mod` 声明，
+    // 这中间窗的灰显 + 报错没有价值；真忘了挂进 mod 树时 `cargo check`
+    // 自然会报。
+    "rust-analyzer.diagnostics.disabled": [
+        "unlinked-file"
+    ],
     // Windows DLL fix for rust-analyzer's proc-macro server:
     //
     // proc-macro 服务器跑在 toolchain 的 `libexec/` 下，加载

@@ -26,6 +26,7 @@ use super::facing::Facing;
 use super::hitbox::Faction;
 use super::hurtbox::spawn_hurtbox;
 use super::movement::MoveVelocity;
+use super::skill::{CastSkillRequest, SkillBook, SkillCooldowns, SkillId};
 use super::{Body, DamageMessage, Dead, Health, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
 use crate::physics_layers::GameLayer;
@@ -142,6 +143,12 @@ impl Plugin for PlayerPlugin {
         // Update 频率高一点起码保证下个物理 tick 看到的是最新输入。
         app.add_systems(Update, player_movement);
 
+        // J 键 → 发 [`CastSkillRequest`] 请求放 BasicMeleeSlash。这里只是输入到
+        // 意图的最薄一层；技能能不能起手（cooldown / 已在施法）由 SkillPlugin
+        // 的 `try_start_requested_casts` 判断。还没有正式的输入映射层，先把
+        // 键位写死在这里，等真做按键绑定再抽。
+        app.add_systems(Update, player_cast_basic_melee_on_j);
+
         // debug 调试快捷键仅 debug 构建编译，release / dist 零运行开销。
         // 现阶段还没有实际的伤害源（敌人 / 陷阱），这两个键位用来手动
         // 验证 Health / Dead / 复活 的路径是否走通。
@@ -184,7 +191,18 @@ pub fn spawn_player(
     let player_entity = commands
         .spawn((
             Player,
+            // 玩家会的技能 + 各自冷却表。SkillBook::new 自动从模板拷一份默认
+            // 实例值；以后换武器 / 上 buff 走 `SkillBook::get_mut` 修改。
+            SkillBook::new([SkillId::BasicMeleeSlash]),
+            SkillCooldowns::default(),
+            // 阵营 —— 技能 / hitbox / 友冷过滤 未来都会读。玩家总是 Player 阵营。
+            Faction::Player,
             Transform::from_translation(local_pos),
+            // 父 entity 自身不渲染，但 sprite 子 entity 带 `Visibility`
+            // （`Sprite3d` 隐式 require）。Bevy 的可见性沿 hierarchy 继承，
+            // 父没有 `Visibility` → `InheritedVisibility` 传播链断 → B0004 warning。
+            // 加一个默认值把链补上；同时未来想整角色统一隐藏也能直接 toggle 这里。
+            Visibility::default(),
             // Kinematic 刚体：position / velocity / 重力 全部由游戏代码接管
             // （见 `unit/movement.rs` 顶部文档）。走动不是被 solver
             // 推出来的，是每帧 sweep-and-slide 主动推出来的 —— 互相挡却
@@ -385,5 +403,28 @@ fn debug_fire_projectile_on_f(
             15.0, // 占位伤害
             3.0,  // 占位寿命（秒）
         );
+    }
+}
+
+/// 按 `J` 发起 BasicMeleeSlash 施法请求。
+///
+/// 只发请求，不直接开始施法 —— [`SkillPlugin`](super::skill::SkillPlugin) 的
+/// `try_start_requested_casts` 检查 cooldown / 是否已在施法 / 是否拥有该技能，
+/// 通过后才挂上 [`SkillCast`](super::skill::SkillCast) 进入 windup。
+///
+/// 死了的玩家不接受输入。
+fn player_cast_basic_melee_on_j(
+    keys: Res<ButtonInput<KeyCode>>,
+    q_player: Query<Entity, (With<Player>, Without<Dead>)>,
+    mut requests: MessageWriter<CastSkillRequest>,
+) {
+    if !keys.just_pressed(KeyCode::KeyJ) {
+        return;
+    }
+    for caster in &q_player {
+        requests.write(CastSkillRequest {
+            caster,
+            skill_id: SkillId::BasicMeleeSlash,
+        });
     }
 }
