@@ -26,8 +26,8 @@ use super::facing::Facing;
 use super::hitbox::Faction;
 use super::hurtbox::spawn_hurtbox;
 use super::movement::MoveVelocity;
-use super::skill::{CastSkillRequest, SkillBook, SkillCooldowns, SkillId};
-use super::{Body, DamageMessage, Dead, Health, UNIT_BODY_HEIGHT, Unit};
+use super::skill::{CastSkillRequest, SkillKind, SkillKindSet};
+use super::{Body, Dead, Health, Strength, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
 use crate::physics_layers::GameLayer;
 use crate::projectile::spawn_linear_projectile;
@@ -191,10 +191,14 @@ pub fn spawn_player(
     let player_entity = commands
         .spawn((
             Player,
-            // 玩家会的技能 + 各自冷却表。SkillBook::new 自动从模板拷一份默认
-            // 实例值；以后换武器 / 上 buff 走 `SkillBook::get_mut` 修改。
-            SkillBook::new([SkillId::BasicMeleeSlash]),
-            SkillCooldowns::default(),
+            // 玩家会的招式。SkillKindSet 是唯一应该写的 intent；SkillBook
+            // （当前数值缓存）和 SkillCooldowns 由 `#[require]` 自动带上，
+            // recompute 系统在首帧 / source 变化时自动填好 SkillBook。
+            SkillKindSet::new([SkillKind::BasicMeleeSlash]),
+            // caster-side 输出系数 —— 被 `recompute_skill_book` 读取、烧进
+            // SkillBook 里每招的 HitSpec.modifiers 头部。玩家初始 1.0
+            // （无加成），未来装备 / buff 会修改。
+            Strength(1.0),
             // 阵营 —— 技能 / hitbox / 友冷过滤 未来都会读。玩家总是 Player 阵营。
             Faction::Player,
             Transform::from_translation(local_pos),
@@ -321,24 +325,26 @@ fn player_movement(
     }
 }
 
-/// 按 `Space` 给玩家一次 10 点伤害 —— 走正规的 [`DamageMessage`] 通道，
-/// 跟未来的敌人攻击共用结算路径，验证消息总线打通。
+/// 按 `Space` 给玩家一次 10 点伤害 —— 这是**调试合成伤害**，直接写
+/// [`Health::current`]，**不走**正规的 [`DamagePipeline`](super::DamagePipeline)
+/// 流水线：没有 caster / hitbox 来源，伪造一条 `DamageDealtMessage` 反而
+/// 让下游的 trigger / 统计系统看到一个虚假 caster Entity，多一层坑。
+/// 调试键就应该是"跳过中间环节、直接验证结果"。
+///
+/// `Without<Dead>` filter —— 死人不再被打（跟 pipeline 一致）。打死后按
+/// `R` 复活才能继续測试。
 ///
 /// 只在 debug build 编译；release / dist 完全不存在这个 system。
 #[cfg(debug_assertions)]
 fn debug_damage_player_on_space(
     keys: Res<ButtonInput<KeyCode>>,
-    mut damage: MessageWriter<DamageMessage>,
-    q_player: Query<Entity, With<Player>>,
+    mut q_player: Query<&mut Health, (With<Player>, Without<Dead>)>,
 ) {
     if !keys.just_pressed(KeyCode::Space) {
         return;
     }
-    for entity in &q_player {
-        damage.write(DamageMessage {
-            target: entity,
-            amount: 10.0,
-        });
+    for mut hp in &mut q_player {
+        hp.current = (hp.current - 10.0).max(0.0);
     }
 }
 
@@ -424,7 +430,7 @@ fn player_cast_basic_melee_on_j(
     for caster in &q_player {
         requests.write(CastSkillRequest {
             caster,
-            skill_id: SkillId::BasicMeleeSlash,
+            kind: SkillKind::BasicMeleeSlash,
         });
     }
 }

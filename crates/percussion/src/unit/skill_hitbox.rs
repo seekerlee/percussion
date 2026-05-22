@@ -5,10 +5,19 @@
 //! [`super::skill`] 子系统只管"技能放出来了"—— 在 active 阶段切入时发一条
 //! [`SkillActivatedMessage`] 就完事了，**不**知道 hitbox 是什么。
 //! [`super::hitbox`] 子系统只提供 [`spawn_hitbox`] 和"判定撞 hurtbox →
-//! 发 [`DamageMessage`](super::DamageMessage)"，**不**知道 skill 是什么。
+//! 发 [`CollisionMessage`](super::hitbox::CollisionMessage)"，**不**知道 skill 是什么。
 //!
 //! 中间这块"听到技能激活 → 调用 spawn_hitbox 摆好一块判定盒"的翻译工作
 //! 由本模块负责。让两个子系统都保持单向不依赖、各自可测试。
+//!
+//! # 纯翻译：Spec 里的 caster-side 修正已结清
+//!
+//! [`HitSpec`](super::hitbox::HitSpec) 里的 modifiers / triggers 在
+//! [`SkillBook`](super::skill::SkillBook) recompute 阶段就已经烧进去了
+//! （见 [`super::skill::recompute_skill_book`]）。本桥接只负责 clone 一份
+//! `on_hit` 丢给 hitbox，**不读任何 caster 数值组件**（[`Strength`](super::Strength) /
+//! 未来 buff / equipment）。这样 caster-side 数值业务集中在 recompute 一处，
+//! 桥接退化成纯函数。
 //!
 //! # 未来同源桥接
 //!
@@ -63,16 +72,17 @@ impl Plugin for SkillHitboxPlugin {
 /// caster 中途消失 / 没了 SkillBook / 没了 Faction / SkillBook 找不到该
 /// 技能 —— 都直接跳过该条消息，不 panic，但会 `warn!` 出来。这些情况
 /// 按设计都不该发生，真发生了说明上游有 bug，需要看到才能修。
+///
+/// `on_hit` 直接 clone —— 里面的 modifiers / triggers 已被
+/// [`recompute_skill_book`](super::skill::recompute_skill_book) 烧好，本桥接
+/// 不再添加任何 caster-side 修正。
 fn spawn_hitbox_on_skill_activated(
     mut events: MessageReader<SkillActivatedMessage>,
     q_caster: Query<(&Transform, &Facing, &Faction, &SkillBook)>,
     mut commands: Commands,
 ) {
     for ev in events.read() {
-        // 下面两个 `else` 分支按设计都不该走到 —— 一旦走到说明上游有 bug
-        // （比如 caster 在同帧被 despawn、有人误删了 Facing / SkillBook、
-        // 或者 skill 状态机持有的 SkillId 不在 caster 的 SkillBook 里）。
-        // 静默 continue 会让"按 J 没反应"的问题极难排查，所以 warn 出来。
+        // 下面两个 `else` 分支按设计都不该走到 —— 一旦走到说明上游有 bug。
         let Ok((caster_tf, facing, faction, book)) = q_caster.get(ev.caster) else {
             warn!(
                 "skill activated but caster {:?} missing Transform/Facing/Faction/SkillBook; skipping",
@@ -80,15 +90,16 @@ fn spawn_hitbox_on_skill_activated(
             );
             continue;
         };
-        let Some(def) = book.get(ev.skill_id) else {
+        let Some(skill) = book.get(ev.kind) else {
             warn!(
                 "skill {:?} activated on caster {:?} but not in its SkillBook; skipping",
-                ev.skill_id, ev.caster
+                ev.kind, ev.caster
             );
             continue;
         };
 
-        match ev.effect {
+        // `&ev.effect` 借用而不是 move —— SkillEffectKind 不再 Copy。
+        match &ev.effect {
             SkillEffectKind::MeleeBox {
                 reach,
                 swing,
@@ -111,10 +122,10 @@ fn spawn_hitbox_on_skill_activated(
                     *faction,
                     // Cuboid 是对称的，不需要 rotate；中心点放对即可。
                     // 参数顺序 = 全长 (X, Y, Z) = (reach, height, swing)。
-                    Collider::cuboid(reach, height, swing),
+                    Collider::cuboid(*reach, *height, *swing),
                     hitbox_tf,
-                    on_hit.damage,
-                    def.active,
+                    on_hit.clone(),
+                    skill.active,
                 );
             }
         }
