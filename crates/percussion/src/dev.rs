@@ -10,6 +10,7 @@
 //! - [`camera`]：pan-orbit + WASD 相机控制器，把固定相机变得可拖动
 //! - [`inspector`]：egui World inspector，运行时编辑任意 Reflect 组件
 //! - [`physics_debug`]：avian 物理 collider wireframe 可视化
+//! - [`fps`]：左上角 FPS 数字 + frame time graph（来自 `bevy_dev_tools`）
 //!
 //! # 加东西的约定
 //!
@@ -21,6 +22,7 @@
 //! 的责任。本模块的语义边界是"仅 dev 构建存在"。
 
 pub mod camera;
+pub mod fps;
 pub mod grid;
 pub mod inspector;
 pub mod physics_debug;
