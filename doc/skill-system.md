@@ -10,10 +10,6 @@
 > [crates/percussion/src/unit/hurtbox.rs](../crates/percussion/src/unit/hurtbox.rs)、
 > [crates/percussion/src/unit/player/animation.rs](../crates/percussion/src/unit/player/animation.rs)
 
-```mermaid
-graph LR
-  A --> B
-```
 
 ---
 
