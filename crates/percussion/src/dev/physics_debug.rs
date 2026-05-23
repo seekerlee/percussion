@@ -52,6 +52,10 @@ use bevy::prelude::*;
 /// 命名跟 avian 的 `PhysicsDebugPlugin` 区分（带 `Avian` 前缀的是 alias），
 /// 让 `lib.rs` 里 dev 工具列表的 plugin 名跟所在模块路径对得上：
 /// `dev::physics_debug::PhysicsDebugPlugin`。
+//
+// 临时在 `lib.rs` 里注释掉了注册，dead_code 警告会让 clippy `-D warnings`
+// 爆。短期"看视觉效果"用，回头开回来就可以删 allow。
+#[allow(dead_code)]
 pub struct PhysicsDebugPlugin;
 
 impl Plugin for PhysicsDebugPlugin {

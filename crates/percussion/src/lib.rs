@@ -227,14 +227,27 @@ fn spawn_initial_scene(
         height,
     );
 
-    // 玩家在 stage 中央上方 5 米处生成，靠重力落下 —— 可以用肉眼验证
-    // 物理接触、撞 bounds 屏障的反馈都正常工作。
-    unit::player::spawn_player(
-        &mut commands,
-        &player_assets,
-        stage_entity,
-        Vec3::new(0.0, 5.0, 0.0),
-    );
+    // 在 stage 内排一个 5 × 4 = 20 个 player 的网格，覆盖屏幕中心 → 四角，
+    // 用来肉眼检查 sprite billboard 在屏幕各位置的视觉对齐（Y 轴 billboard
+    // 下，边缘 sprite 应该跟 hurtbox wireframe 一致 lean）。所有 Player
+    // 共享 input system 会一起动，方便观察"运动中的 sprite 跟 collider
+    // 是否始终对齐"。
+    //
+    // stage 是 20m × 15m，X ∈ [-10, 10]、Z ∈ [-7.5, 7.5]；
+    // 取 X = [-8, -4, 0, 4, 8]（5 列）× Z = [-6, -2, 2, 6]（4 行），
+    // 间距 4m 远大于 PLAYER_BODY_RADIUS = 0.4m，不会互挤。
+    for x_idx in 0..5 {
+        for z_idx in 0..4 {
+            let x = -8.0 + (x_idx as f32) * 4.0;
+            let z = -6.0 + (z_idx as f32) * 4.0;
+            unit::player::spawn_player(
+                &mut commands,
+                &player_assets,
+                stage_entity,
+                Vec3::new(x, 5.0, z),
+            );
+        }
+    }
 
     // Dragon1 占位 —— 在玩家旁边落下，验证 sprite 加载 + Unit 共享通路。
     // 之后接 AI 时这个 spawn 调用会被 wave / spawner 系统替代。
