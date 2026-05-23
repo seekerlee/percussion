@@ -107,5 +107,35 @@
                 }
             ]
         }
-    ]
+    ],
+    // ---------- highlight (fabiospampinato.vscode-highlight) ----------
+    //
+    // 给 Bevy 的 ECS / Schedule / Reflect / Asset 等 derive trait 名
+    // 上色，让"这个 struct 在 ECS 里扮演什么角色"在文件里一眼可见。
+    //
+    // 锚定到 `#[derive(...)]` 上下文：用三段捕获组 + 中间一段染色，
+    // 前后两段空装饰只起 anchor 作用 —— 这样只染 derive 列表里的
+    // `Component`，避免把 `impl Component for X` / `Query<&Component>`
+    // 这些位置也涂花。
+    //
+    // 正则双重转义：JSON 一层 + regex 一层（`\b` → `\\b`）。
+    // 三个捕获组必须各配一份装饰，空装饰 `{}` 表示不染色。
+    //
+    // 想换颜色直接改 `color` / `backgroundColor`；想加新 trait 把名字
+    // alternation 进中间捕获组即可（注意：trait 名要满足 word boundary，
+    // 不能跟其他 derive 子串前后粘连）。
+    "highlight.regexes": {
+        "(#\\[derive\\([^)]*\\b)(Component|Resource|Event|Bundle|States|SubStates|ScheduleLabel|SystemSet|SystemParam|Asset|Reflect|TypePath|Relationship|RelationshipTarget|QueryData|QueryFilter)(\\b[^)]*\\))": {
+            "filterLanguageRegex": "rust",
+            "decorations": [
+                {},
+                {
+                    "color": "#FF8C42",
+                    "fontWeight": "bold",
+                    "backgroundColor": "rgba(255,140,66,0.12)"
+                },
+                {}
+            ]
+        }
+    }
 }

@@ -7,6 +7,10 @@
         "ms-vscode.cpptools",
         "fill-labs.dependi",
         "usernamehw.errorlens",
-        "spencerwmiles.vscode-task-buttons"
+        "spencerwmiles.vscode-task-buttons",
+        // 用正则给 #[derive(Component, ...)] 里的 Bevy trait 名上色，
+        // 让 ECS 关键概念在文件里一眼可见。配置见 settings.json 的
+        // `highlight.regexes`。
+        "fabiospampinato.vscode-highlight"
     ]
 }
