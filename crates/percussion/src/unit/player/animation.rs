@@ -24,8 +24,10 @@
 //!    `CastSkillRequest`，照搬这套 "看 SkillCast 决定动作" 的模式即可，
 //!    无需重新发明输入处理。
 //! 2. **动画与 cast 严格同步**：动画总长 = `cast.windup + active + recovery`，
-//!    fps 由帧数 / 总时长**自动算**。策划改 [`Skill`] 时长数值，动画自动
-//!    跟上，不需要手对表。
+//!    且采用**三段线性划帧**：[`PlayerAction::active_frames`] 声明哪几帧是伤
+//!    害帧 —— 它们精确播放在 [`SkillCast`] 的 Active 阶段里，前 / 后 两段
+//!    分别填满 windup / recovery。策划调 [`Skill`] 时间数值 / 画师改伤害帧
+//!    区间，两者互不踩脚、自动重新对齐。
 //!
 //! # 调度
 //!
@@ -95,6 +97,43 @@ impl PlayerAction {
             Self::Run => 4..11,
             Self::Attack => 11..16,
             Self::Jump => 16..20,
+        }
+    }
+
+    /// **active 帧子区间** —— 该动作中「系统效应真正生效」的帧
+    /// 区间（sheet-absolute、半开区间，跟 [`range`](Self::range) 同坐标）。
+    ///
+    /// 借的是格斗游戏 / 动画术语里的 *active frames*：一个有阶段的动作通常
+    /// 分 pre / active / post 三段，active 是「这一招在做它该做的事」的那几
+    /// 帧。具体「做什么」由动作本身决定：
+    ///
+    /// | 动作 | active 帧的语义 | 对齐的逻辑窗 |
+    /// |---|---|---|
+    /// | Attack | hitbox 存在、判定能命中 | `Skill::active` |
+    /// | Jump | 真正腾空、重力起作用 | `Jump::airborne`（未接） |
+    /// | Idle / Run | —— 没有内部阶段 | `None` |
+    ///
+    /// `None` 不是「占位」—— 它表示「这个动作没有三段结构」。Idle / Run
+    /// 是持续状态，本来就不分阶段；Jump 暂为 `None` 是因为 Jump 系统还
+    /// 没接进来，等接入时填上腾空子区间。
+    ///
+    /// # 例：Attack 默认 13..15
+    ///
+    /// 整个攻击动作是 sheet 帧 11..16（5 帧）：
+    ///
+    /// ```text
+    /// frame:   11      12      13      14      15
+    ///        ├─────┼──────┼──────┼──────┼─────┤
+    /// phase:   pre   pre  │   active(13..15)   │ post
+    ///          两帧抬手      两帧接触、判定能命中   一帧收招
+    /// ```
+    ///
+    /// 只要「中间一帧接触」→ `Some(13..14)`；「中间三帧都算接触」→ `Some(12..15)`。
+    const fn active_frames(self) -> Option<Range<usize>> {
+        match self {
+            Self::Attack => Some(13..15),
+            // Jump 接入时改成 Some(腾空子区间)。Idle / Run 永远 None。
+            Self::Idle | Self::Run | Self::Jump => None,
         }
     }
 
@@ -253,13 +292,24 @@ fn decide_player_action(
 /// `handle_texture_atlases` 随即跑一轮查 cache。值没变还写 = 每帧白跑
 /// cache lookup，加个"真变了才写"的护栏几乎免费。`Transform` 同理。
 ///
-/// # 攻击动画的 fps 从 [`SkillCast`] 全长反推
+/// # 攻击动画的三段线性划帧（与 Skill phase 对齐）
 ///
-/// Attack 帧 fps **不**用 [`PlayerAction::fps`]：动画总长跟着 `Skill` 的
-/// `windup + active + recovery` 走，进度 = `elapsed / total`，帧 index =
-/// `range.start + (progress * len).floor()`。这样策划改技能时长数值，
-/// 动画自动同步收紧 / 拉长，不用手对表。`SkillCast` 不在时（Idle / Run /
-/// Jump）按各自的常量 fps 推进。
+/// Attack 帧 fps **不**用 [`PlayerAction::fps`]。动画总长跟着 `Skill` 的
+/// `windup + active + recovery` 走，但画帧不是“敦帧均匀铺”，而是按
+/// [`PlayerAction::active_frames`] 声明的伤害帧区间划成三段：
+///
+/// ```text
+/// elapsed:    0 ────────────── windup ───────── +active ───────── +recovery
+/// sprite frames: [pre 抬手]               [active 接触]            [post 收招]
+/// ```
+///
+/// pre 段在 `skill.windup` 秒内线性播完 `active_frames.start - range.start` 帧；
+/// active 段在 `skill.active` 秒内线性播完伤害帧区间；post 段在 `skill.recovery`
+/// 秒内线性播完剩下的帧。三段各自的局部 fps **独立**，这才能保证“active
+/// 子区间恰好播于 skill 的 Active 阶段里”——于是 hitbox spawn (靠 Skill phase 发
+/// SkillActivatedMessage 触发) 与画面上接触完美对齐。
+///
+/// `SkillCast` 不在时（Idle / Run / Jump）按各自的常量 fps 推进。
 #[allow(clippy::type_complexity)]
 fn tick_player_animation(
     time: Res<Time>,
@@ -283,22 +333,25 @@ fn tick_player_animation(
         let len = range.end - range.start;
 
         // 当前动作内的帧偏移：
-        // - Attack + 有 SkillCast → 进度按 cast 全长归一化
+        // - Attack + 有 SkillCast + 声明了伤害帧区间 → 三段划帧（跳过到下面
+        //   的 `paced_frame_offset` 中理）
         // - 否则一次性动作（Jump）：按常量 fps 推进、停在最后一帧
         // - 否则循环动作（Idle / Run）：按常量 fps 推进、取模回到开头
         let frame_offset = if action == PlayerAction::Attack
             && let Some(cast) = cast
             && let Some(skill) = book.get(cast.kind)
+            && let Some(active_local) = action.active_frames()
         {
-            let total = skill.windup + skill.active + skill.recovery;
-            // total 理论上 > 0（template 里所有阶段都是正数）。退化情况
-            // 真出现 total == 0 时 progress = +inf，clamp 到 1.0 兜底。
-            let progress = if total > 0.0 {
-                (state.elapsed / total).min(1.0)
-            } else {
-                1.0
-            };
-            ((progress * len as f32) as usize).min(len - 1)
+            // Attack 的三段时长来自 Skill。将来 Jump / 其他有阶段的动作
+            // 可以复用 `paced_frame_offset`，只是时长源不同。
+            paced_frame_offset(
+                state.elapsed,
+                range.clone(),
+                active_local,
+                skill.windup,
+                skill.active,
+                skill.recovery,
+            )
         } else {
             let raw = (state.elapsed * action.fps()) as usize;
             if action.looping() {
@@ -326,5 +379,146 @@ fn tick_player_animation(
                 }
             }
         }
+    }
+}
+
+/// **纯函数**：把三段时长（pre / active / post 各自的秒数）映射成
+/// 当前帧在 `range` 上的偏移（0..len），让 `active` 子区间恰好播于
+/// `[pre_secs, pre_secs + active_secs)` 的时间窗里。
+///
+/// 这是个**与调度源解耦**的工具：调用方负责把时长喂进来 —— Attack 从
+/// [`Skill`] 取（windup / active / recovery），Jump 将来从自己的状态取
+/// （prep / airborne / landing），数学一样。
+///
+/// # 三段设计
+///
+/// 设 `range = 11..16`（总长 5）、`active = 13..15`：
+/// - **pre**    ： `11..13`（长 2）, 在 `pre_secs` 内线性播完
+/// - **active** ： `13..15`（长 2）, 在 `active_secs` 内线性播完
+/// - **post**   ： `15..16`（长 1）, 在 `post_secs` 内线性播完
+///
+/// 每段独立线性 = 「active 子区间出现在 `[pre_secs, pre_secs + active_secs)`」
+/// 这条保证不依赖任何外部对齐机制。
+///
+/// # 边界 & 退化
+///
+/// - 某一段秒数 ≤ 0：跳过该段，帧位留在本段起点。
+/// - `elapsed >= total`：clamp 到最后一帧（`len - 1`）。
+/// - `active` 必须是 `range` 的非空子区间 —— `debug_assert!` 检查。
+fn paced_frame_offset(
+    elapsed: f32,
+    range: Range<usize>,
+    active: Range<usize>,
+    pre_secs: f32,
+    active_secs: f32,
+    post_secs: f32,
+) -> usize {
+    debug_assert!(
+        active.start >= range.start && active.end <= range.end && active.start < active.end,
+        "active {:?} must be a non-empty sub-range of range {:?}",
+        active,
+        range,
+    );
+
+    let len = range.end - range.start;
+    let pre_len = active.start - range.start;
+    let act_len = active.end - active.start;
+    // post_len 后面不直接用 —— 逆向划帧时靠 `len - pre_len - act_len` 隐式表达。
+
+    /// 在 "本段合计 `seg_secs` 秒内播 `seg_len` 帧" 的约束下，算当前子偏移。
+    fn linear(local_t: f32, seg_secs: f32, seg_len: usize) -> usize {
+        if seg_secs <= 0.0 || seg_len == 0 {
+            return 0;
+        }
+        ((local_t / seg_secs) * seg_len as f32) as usize
+    }
+
+    let raw = if elapsed < pre_secs {
+        // pre 段。pre_len = 0 时 raw = 0，帧就是 range.start（= active.start）——
+        // 表示画师未画 anticipation 帧、windup 期间顯示挥击首帧作为 poised 姿。
+        linear(elapsed, pre_secs, pre_len)
+    } else if elapsed < pre_secs + active_secs {
+        // active 段
+        pre_len + linear(elapsed - pre_secs, active_secs, act_len)
+    } else {
+        // post 段
+        let post_len = len - pre_len - act_len;
+        let local = elapsed - pre_secs - active_secs;
+        pre_len + act_len + linear(local, post_secs, post_len)
+    };
+    raw.min(len - 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// elapsed = 0 应处于首帧（pre 段起点）。
+    #[test]
+    fn frame_zero_at_start() {
+        assert_eq!(paced_frame_offset(0.0, 11..16, 12..14, 0.10, 0.05, 0.15), 0);
+    }
+
+    /// elapsed 刚达 pre 边界 → 进入 active 首帧（pre_len = 1，偏移 1）。
+    #[test]
+    fn enters_active_at_pre_boundary() {
+        assert_eq!(
+            paced_frame_offset(0.10, 11..16, 12..14, 0.10, 0.05, 0.15),
+            1,
+        );
+    }
+
+    /// active 阶段后半段 → 偏移到 active 区间的第二帧（pre_len + 1）。
+    ///
+    /// 不取正中点（t = 0.125）是因为 `(0.025 / 0.05) * 2` 在 f32 下不严格 = 1.0，
+    /// 取 75% 处避开浮点抖动。
+    #[test]
+    fn second_half_of_active_hits_second_active_frame() {
+        // t = 0.1375（active 75% 处），local_t = 0.0375，0.0375/0.05*2 = 1.5 → +1
+        // 到 pre_len + 1 = 2
+        assert_eq!(
+            paced_frame_offset(0.1375, 11..16, 12..14, 0.10, 0.05, 0.15),
+            2,
+        );
+    }
+
+    /// elapsed 刚达 pre+active 边界 → 进入 post 首帧（pre_len + act_len = 3）。
+    #[test]
+    fn enters_post_at_active_boundary() {
+        assert_eq!(
+            paced_frame_offset(0.15, 11..16, 12..14, 0.10, 0.05, 0.15),
+            3,
+        );
+    }
+
+    /// elapsed 超过 total → clamp 到最后一帧。
+    #[test]
+    fn clamps_after_total() {
+        // total = 0.30，超出后应停在最后一帧（len - 1 = 4）。
+        assert_eq!(
+            paced_frame_offset(0.50, 11..16, 12..14, 0.10, 0.05, 0.15),
+            4,
+        );
+    }
+
+    /// 未声明抬手帧（pre_len = 0）：elapsed < pre_secs 依然在帧 0 作为 poised 姿。
+    #[test]
+    fn no_pre_frames_keeps_first_frame_during_pre() {
+        // active 起点 = range 起点 → pre_len = 0
+        assert_eq!(
+            paced_frame_offset(0.05, 11..16, 11..14, 0.10, 0.05, 0.15),
+            0,
+        );
+        // 进入 active 边界 → 仍是 0（pre_len = 0，linear 起点 = 0）
+        assert_eq!(
+            paced_frame_offset(0.10, 11..16, 11..14, 0.10, 0.05, 0.15),
+            0,
+        );
+    }
+
+    /// pre_secs = 0（瞬发招）：t = 0 直接落在 active 首帧。
+    #[test]
+    fn zero_pre_starts_in_active() {
+        assert_eq!(paced_frame_offset(0.0, 11..16, 12..14, 0.0, 0.10, 0.20), 1,);
     }
 }
