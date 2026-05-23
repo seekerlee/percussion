@@ -22,13 +22,13 @@ use bevy_sprite3d::prelude::*;
 
 pub mod animation;
 
-use animation::{Dragon1AnimationPlugin, Dragon1AnimationState};
 use super::hitbox::Faction;
 use super::hurtbox::spawn_hurtbox;
 use super::{Body, Health, Strength, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
 use crate::physics_layers::GameLayer;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
+use animation::{Dragon1AnimationPlugin, Dragon1AnimationState};
 
 // ============================================================================
 // TODO（你来填）：以下常量是占位值，按 sprite 实际像素 / 期望血量改。

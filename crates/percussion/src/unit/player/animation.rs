@@ -1,14 +1,31 @@
-//! 玩家动画状态机 —— 把 `MoveVelocity` / 按键映射成
+//! 玩家动画状态机 —— 把当前 [`SkillCast`] / [`MoveVelocity`] 映射成
 //! [`PlayerAction`]，并把当前帧 index / 朝向写到 sprite 子实体的
 //! [`TextureAtlas`] 与 quad 的 [`Transform`]。
 //!
 //! # 架构位置
 //!
-//! 视觉表达层，**不**做物理决策。读取：[`MoveVelocity`]、键盘；
-//! 写入：本 unit 自己的 [`PlayerAnimationState`] 与共享的
-//! [`Facing`] component，以及它 sprite 子实体的 [`Sprite`]
-//! （`texture_atlas.index`）和 [`Transform`]（`scale.x` 镜像）。
-//! 不读写 unit 本体的 [`Transform`] / 物理状态 / 战斗状态。
+//! 视觉表达层，**不**做物理决策、**不**做战斗决策。读取：[`MoveVelocity`]、
+//! [`SkillCast`]、[`SkillBook`]；写入：本 unit 自己的
+//! [`PlayerAnimationState`] 与共享的 [`Facing`] component，以及它 sprite
+//! 子实体的 [`Sprite`]（`texture_atlas.index`）和 [`Transform`]
+//! （`scale.x` 镜像）。不读写 unit 本体的 [`Transform`] / 物理状态 /
+//! 战斗状态。
+//!
+//! # 动画完全 follow SkillCast（核心哲学）
+//!
+//! 攻击动画是 [`SkillCast`] 的**派生表达**，不是按键的直接产物：
+//! `J` 键发 [`CastSkillRequest`](crate::unit::skill::CastSkillRequest)
+//! → `try_start_requested_casts` 通过 → caster 上挂 [`SkillCast`] →
+//! 本模块**看到 SkillCast 才播攻击动画**。键盘与本模块解耦。
+//!
+//! 这样设计的两个好处：
+//!
+//! 1. **同一机制可复用到 AI / 其他 unit**：dragon1 之类的 unit 只要 AI 发
+//!    `CastSkillRequest`，照搬这套 "看 SkillCast 决定动作" 的模式即可，
+//!    无需重新发明输入处理。
+//! 2. **动画与 cast 严格同步**：动画总长 = `cast.windup + active + recovery`，
+//!    fps 由帧数 / 总时长**自动算**。策划改 [`Skill`] 时长数值，动画自动
+//!    跟上，不需要手对表。
 //!
 //! # 调度
 //!
@@ -20,14 +37,12 @@
 //!
 //! # 状态切换规则
 //!
-//! 每帧重新决策：
+//! 每帧重新决策（顶层优先级 → 末位兜底）：
 //!
-//! 1. 攻击键 just_pressed → Attack（即使正在 Attack 也重置 = 连击）
-//! 2. 否则若正在 Attack 且还没播完 → 继续 Attack
-//! 3. 否则若 XZ 速度 > 阈值 → Run
-//! 4. 否则 → Idle
-//!
-//! 攻击播完后是否回到 Run / Idle 由当帧的速度决定，零特殊状态。
+//! 1. 当前帧挂着 [`SkillCast`] → 按 `cast.kind` 选攻击动作；
+//!    commit-to-swing 自动来自 `SkillCast` 的存在性，不需要单独兜底分支
+//! 2. 否则若 XZ 速度 > 阈值 → Run
+//! 3. 否则 → Idle
 
 use std::ops::Range;
 
@@ -37,9 +52,7 @@ use bevy::prelude::*;
 use super::Player;
 use crate::unit::facing::Facing;
 use crate::unit::movement::MoveVelocity;
-
-/// 触发攻击的按键。临时绑定，等输入抽象层立起来再迁。
-const ATTACK_KEY: KeyCode = KeyCode::KeyX;
+use crate::unit::skill::{SkillBook, SkillCast, SkillKind};
 
 /// XZ 平面速度模长大于多少米/秒算"在移动"。
 ///
@@ -108,12 +121,6 @@ impl PlayerAction {
             Self::Attack | Self::Jump => false,
         }
     }
-
-    /// 该动作完整播完一遍需要的时间（秒）。
-    fn duration_secs(self) -> f32 {
-        let len = self.range().end - self.range().start;
-        len as f32 / self.fps()
-    }
 }
 
 /// 挂在玩家 entity 上的动画状态。
@@ -146,10 +153,10 @@ impl Plugin for PlayerAnimationPlugin {
     }
 }
 
-/// 根据物理速度 + 按键决定当前帧应当处于哪个 [`PlayerAction`]，以
-/// 及朝哪个方向。
+/// 根据物理速度 + 当前 [`SkillCast`] 决定当前帧应当处于哪个
+/// [`PlayerAction`]，以及朝哪个方向。
 ///
-/// 这是动画的"逻辑层"：只读输入 + 物理状态，只写
+/// 这是动画的"逻辑层"：只读物理 / 战斗派生状态，只写
 /// [`PlayerAnimationState`] / [`Facing`]。
 ///
 /// # 朝向规则
@@ -157,11 +164,25 @@ impl Plugin for PlayerAnimationPlugin {
 /// `vel.0.x > MOVE_EPSILON` → 朝右；`< -MOVE_EPSILON` → 朝左；介于两
 /// 者之间保持上一次朝向。这样纯 Z 轴移动 / 静止 不会引起朝
 /// 向抽动，也不会被微小浮点噪声触发翻转。
+///
+/// # 为什么不再读键盘
+///
+/// 攻击动画的来源是 [`SkillCast`] 而不是 X 键 —— 按键先走
+/// [`CastSkillRequest`](crate::unit::skill::CastSkillRequest) 这条战斗
+/// 链，本模块只看 cast 是否存在。dragon1 之类的 AI unit 同样适用，
+/// 不需要重写决策逻辑。
 fn decide_player_action(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut query: Query<(&MoveVelocity, &mut PlayerAnimationState, &mut Facing), With<Player>>,
+    mut query: Query<
+        (
+            &MoveVelocity,
+            Option<&SkillCast>,
+            &mut PlayerAnimationState,
+            &mut Facing,
+        ),
+        With<Player>,
+    >,
 ) {
-    for (vel, mut state, mut facing) in &mut query {
+    for (vel, cast, mut state, mut facing) in &mut query {
         // 朝向 —— 与动作决策独立。攻击 / Idle 过程中如果被推 / 被
         // 击退使得 x 速度有明显分量，朝向也会跟着变 —— 是否“被
         // 推动朝向”以后要不要变为“只看主动输入”，等受击玩法落地再调。
@@ -176,18 +197,16 @@ fn decide_player_action(
             *facing = desired_facing;
         }
 
-        let attack_pressed = keys.just_pressed(ATTACK_KEY);
         let moving = vel.0.xz().length() > MOVE_EPSILON;
 
-        let next = if attack_pressed {
-            // 连击：即使正在 Attack 也算新一次攻击 —— 计时器重置后
-            // 会从攻击第一帧重新播。
-            PlayerAction::Attack
-        } else if state.action == PlayerAction::Attack
-            && state.elapsed < PlayerAction::Attack.duration_secs()
-        {
-            // 攻击未播完 —— 不被移动 / 静止覆盖（commit-to-swing）。
-            PlayerAction::Attack
+        // 1) 有 SkillCast 就播对应攻击动作（commit-to-swing 自动从
+        //    SkillCast 的生命周期来 —— cast 还在就持续 Attack，cast
+        //    被 tick_active_casts 移除当帧立刻回到 Run / Idle）。
+        // 2) match 是 exhaustive 的：新增 SkillKind 时编译器逼着补 arm。
+        let next = if let Some(cast) = cast {
+            match cast.kind {
+                SkillKind::BasicMeleeSlash => PlayerAction::Attack,
+            }
         } else if moving {
             PlayerAction::Run
         } else {
@@ -233,25 +252,60 @@ fn decide_player_action(
 /// `atlas.index = ...` 每次都会触发 `Changed<Sprite>`，bevy_sprite3d 的
 /// `handle_texture_atlases` 随即跑一轮查 cache。值没变还写 = 每帧白跑
 /// cache lookup，加个"真变了才写"的护栏几乎免费。`Transform` 同理。
+///
+/// # 攻击动画的 fps 从 [`SkillCast`] 全长反推
+///
+/// Attack 帧 fps **不**用 [`PlayerAction::fps`]：动画总长跟着 `Skill` 的
+/// `windup + active + recovery` 走，进度 = `elapsed / total`，帧 index =
+/// `range.start + (progress * len).floor()`。这样策划改技能时长数值，
+/// 动画自动同步收紧 / 拉长，不用手对表。`SkillCast` 不在时（Idle / Run /
+/// Jump）按各自的常量 fps 推进。
+#[allow(clippy::type_complexity)]
 fn tick_player_animation(
     time: Res<Time>,
-    mut state_q: Query<(&mut PlayerAnimationState, &Facing, &Children), With<Player>>,
+    mut state_q: Query<
+        (
+            &mut PlayerAnimationState,
+            &Facing,
+            &Children,
+            Option<&SkillCast>,
+            &SkillBook,
+        ),
+        With<Player>,
+    >,
     mut sprite_q: Query<(&mut Sprite, &mut Transform)>,
 ) {
     let dt = time.delta_secs();
-    for (mut state, facing, children) in &mut state_q {
+    for (mut state, facing, children, cast, book) in &mut state_q {
         state.elapsed += dt;
         let action = state.action;
         let range = action.range();
         let len = range.end - range.start;
 
-        // 当前动作内的帧偏移。一次性动作（Attack / Jump）停在最后
-        // 一帧，循环动作（Idle / Run）取模回到开头。
-        let raw = (state.elapsed * action.fps()) as usize;
-        let frame_offset = if action.looping() {
-            raw % len
+        // 当前动作内的帧偏移：
+        // - Attack + 有 SkillCast → 进度按 cast 全长归一化
+        // - 否则一次性动作（Jump）：按常量 fps 推进、停在最后一帧
+        // - 否则循环动作（Idle / Run）：按常量 fps 推进、取模回到开头
+        let frame_offset = if action == PlayerAction::Attack
+            && let Some(cast) = cast
+            && let Some(skill) = book.get(cast.kind)
+        {
+            let total = skill.windup + skill.active + skill.recovery;
+            // total 理论上 > 0（template 里所有阶段都是正数）。退化情况
+            // 真出现 total == 0 时 progress = +inf，clamp 到 1.0 兜底。
+            let progress = if total > 0.0 {
+                (state.elapsed / total).min(1.0)
+            } else {
+                1.0
+            };
+            ((progress * len as f32) as usize).min(len - 1)
         } else {
-            raw.min(len - 1)
+            let raw = (state.elapsed * action.fps()) as usize;
+            if action.looping() {
+                raw % len
+            } else {
+                raw.min(len - 1)
+            }
         };
         let index = range.start + frame_offset;
         let desired_scale_x = match facing {
