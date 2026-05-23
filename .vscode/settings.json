@@ -136,6 +136,26 @@
                 },
                 {}
             ]
+        },
+        // 第三方 ecosystem crate 的 derive trait —— 同色系（橙）但更浅 / 偏 peach，
+        // 一眼看出 "同类东西、不是 Bevy 自带的"。目前只 bevy_asset_loader 的
+        // AssetCollection；以后多了直接 alternation。
+        //
+        // 单独一条 rule 而不是塞进上面 alternation：vscode-highlight 的 JS regex
+        // 在 `Asset|AssetCollection` 这种"短的在前"的 alternation 上不保证回溯
+        // 取更长匹配 —— `Asset` 先匹成功、后续 `\b` 卡在 `C` 前失败、然后引擎
+        // 不一定退回去试 `AssetCollection`，整条 rule 就 miss 了。拆开规避。
+        "(#\\[derive\\([^)]*\\b)(AssetCollection)(\\b[^)]*\\))": {
+            "filterLanguageRegex": "rust",
+            "decorations": [
+                {},
+                {
+                    "color": "#FFB870",
+                    "fontWeight": "bold",
+                    "backgroundColor": "rgba(255,184,112,0.12)"
+                },
+                {}
+            ]
         }
     }
 }
