@@ -14,34 +14,38 @@
 //! 也都会用），不属于 unit / player / stage 任一具体领域，所以独立成
 //! 模块。
 //!
-//! # 用 full billboard（不是 Y 轴 billboard）
+//! # 用 Y 轴 billboard（不是 full billboard）
 //!
-//! 「**Y 轴 billboard**」只把 sprite 在水平面 yaw 转向相机，sprite 在 world
-//! 里始终垂直于地面。问题：透视相机 + 斜俯角下，**世界 +Y 不在 image
-//! plane 里**（因为相机有 pitch），所以"世界垂直"的 sprite 投影到屏幕
-//! 上时，离屏幕中心越远，越往中心顶部消失点倾斜 —— 视觉上"人没垂直
-//! 于地面"。这是透视投影的固有几何，sprite 本身没歪。
+//! 「**Full billboard**」让 sprite 的 plane 跟相机 image plane 完全平行
+//! （sprite world rotation = camera world rotation）：屏幕上 sprite 永远
+//! 是正立矩形。代价是 sprite 在 world 里跟着相机一起斜着躺，**跟世界
+//! 垂直的 hurtbox / body collider 是两套坐标系**。透视相机下，hurtbox
+//! 的顶端会朝屏幕中心顶部消失点轻微倾斜（投影几何固有），而 sprite
+//! 永远屏幕正立 —— 越往屏幕边缘错位越大，视觉上"sprite 跟 hitbox 不
+//! 对齐"，玩家会觉得"我躲开了为什么还吃伤害"。
 //!
-//! 「**Full billboard**」让 sprite 的 plane 跟相机 image plane 完全平行：
-//! sprite world rotation **直接等于相机 world rotation**。等价于 sprite
-//! 局部三轴跟相机三轴对齐 —— 局部 +Z 朝相机、局部 +Y 朝相机的 image-up
-//! 方向、局部 +X 朝相机的 image-right。
+//! 「**Y 轴 billboard**」（即本模块当前实现）只把 sprite 在水平面 yaw
+//! 转向相机，sprite 在 world 里**始终垂直于地面**，跟 hurtbox / body 处于
+//! 同一坐标系。透视相机下，整个 3D 世界（包括 sprite、hurtbox、地面网格、
+//! 未来的特效）一起朝屏幕边缘消失点 lean —— 自洽，眼睛自动把它读成
+//! "哦这是 3D 透视"，错位感消失。WC3 / 饥荒 / Hades 都是这套：3D 单位
+//! 配 2D 贴图，都在世界坐标里一起 lean。
 //!
-//! 屏幕上 sprite 永远是正立矩形（头朝屏幕正上方）。代价：sprite 在 world
-//! 里**斜着躺**，匹配相机 pitch + yaw —— 视觉上"脚"会偏离 sprite 局部
-//! 中心连线对应的 world 地面点（详见 [`face_camera`] 文档）。这个项目目前
-//! 不画 sprite 自身阴影、相机也不会做大幅 pitch 变化，偏移不显眼。
+//! 代价：屏幕边缘的 sprite 视觉上轻微 lean（lean 角度跟 camera FOV + 屏幕
+//! 偏移成正比）。当前 [`CAMERA_FOV_DEG = 30`](crate::CAMERA_FOV_DEG) 下
+//! 边缘 lean ≈ 5°，肉眼难察觉；且和 hurtbox lean 方向一致，反而强化
+//! "sprite 是一个 3D 物体"的认知。
 //!
-//! # 父的 world rotation 怎么拿
+//! # 父的 world rotation / position 怎么拿
 //!
-//! Bevy 的 [`Transform`] 是**局部坐标**，sprite 的 world rotation =
-//! parent.world_rotation × sprite.local_rotation。billboard 想让 sprite
-//! world rotation 等于相机 world rotation，必须先知道父的 world rotation
-//! 才能反算 local rotation 该写多少。
+//! Bevy 的 [`Transform`] 是**局部坐标**。Y 轴 billboard 要拿父在世界里
+//! 的位置（算从 sprite 指向 camera 的水平方向 → yaw）和父的世界旋转
+//! （反算 sprite 该写多少 local rotation 才能合成目标 world rotation）。
 //!
 //! 本 system **直接通过 [`ChildOf`] 查父 entity 的 [`GlobalTransform`]**，
-//! 读出干净的 `parent.world_rotation`。代价是每个 sprite 多一次 entity
-//! 查询，量级可忽略。
+//! 一次查询同时读出干净的 `parent.world_rotation` 和
+//! `parent.world_translation`。代价是每个 sprite 多一次 entity 查询，
+//! 量级可忽略。
 //!
 //! 不假设父 rotation 永远 identity —— 容易踩的坑：挂 sprite 的 unit 一般
 //! 带 [`avian3d::prelude::LockedAxes::ROTATION_LOCKED`] 防止被撞翻滚，
@@ -80,8 +84,8 @@ use bevy::prelude::*;
 /// ```
 pub const PIXELS_PER_METER: f32 = 32.0;
 
-/// 标记一个 entity 是 billboard sprite，每帧由 [`face_camera`] 把姿态
-/// 对齐到相机的 image plane（full billboard，见模块顶部 doc）。
+/// 标记一个 entity 是 billboard sprite，每帧由 [`face_camera`] 把 yaw
+/// 对齐到相机方向（Y 轴 billboard，见模块顶部 doc）。
 ///
 /// 这个组件本身**不渲染任何东西** —— 通常跟 [`Mesh3d`] + [`MeshMaterial3d`]
 /// 一起挂在同一 entity 上：mesh 用 [`Rectangle::new(w, h)`] 当贴片（默认
@@ -106,45 +110,44 @@ impl Plugin for BillboardPlugin {
     }
 }
 
-/// 每帧把所有 [`BillboardSprite`] 的姿态对齐到相机 image plane（full
-/// billboard）。
+/// 每帧把所有 [`BillboardSprite`] 的 yaw 对齐到相机方向（Y 轴 billboard）。
 ///
 /// # 算法
 ///
-/// 目标 **world rotation** 直接等于相机的 world rotation —— sprite 局部
-/// 三轴跟相机三轴一一对齐：
+/// 目标 **world rotation** = `Quat::from_rotation_y(yaw)`，其中 yaw 是
+/// 在 XZ 平面上、从 sprite（用父的世界 XZ）指向相机的水平方向：
 ///
-/// - sprite 局部 +Z → 相机 +Z（朝相机背后方向）→ sprite 正面贴图对着相机
-/// - sprite 局部 +Y → 相机 +Y（image-up）→ sprite 的"头"投影成屏幕正上
-/// - sprite 局部 +X → 相机 +X（image-right）
+/// - sprite 局部 +Z → 相机方向（投影到 XZ 平面后）→ sprite 贴图正面对相机
+/// - sprite 局部 +Y → world +Y → sprite 永远世界垂直（跟 hurtbox 同坐标系）
+/// - sprite 局部 +X → yaw 旋转后的水平方向，配合 `scale.x = ±1` 镜像翻转
+///   仍然把屏幕左右映射到角色左右（见 `tick_player_animation`）
 ///
 /// 反算 local rotation：
 ///
 /// ```text
-/// sprite.local_rotation = parent.world_rotation⁻¹ × camera.world_rotation
+/// yaw                   = atan2(camera.x - parent.x, camera.z - parent.z)
+/// sprite.local_rotation = parent.world_rotation⁻¹ × Quat::from_rotation_y(yaw)
 /// ```
 ///
-/// 通过 [`ChildOf`] 查父 entity 的 [`GlobalTransform`] 拿
-/// `parent.world_rotation`。详见模块顶部"父的 world rotation 怎么拿"。
+/// `atan2(x, z)` 用 sprite 的世界 X / Z 偏差算"绕 Y 从 +Z 转到该方向"的
+/// 角度。相机正在 sprite 正上方时 dx ≈ dz ≈ 0，`f32::atan2` 在 (0, 0)
+/// 返回 0，sprite 退化为朝 world +Z，不需要特判。
 ///
-/// # 已知视觉代价："脚"漂移
-///
-/// sprite 在 world 里斜着躺（匹配相机 pitch + yaw），所以 sprite 局部
-/// (0, -h/2, 0) 这个视觉"脚"点在 world 里 = sprite_center - (h/2) × camera_up。
-/// 跟 sprite_center 正下方的地面点不重合 —— 视觉上"脚"会比物理 collider
-/// 位置往相机方向偏 sin(pitch) × (h/2)、垂直方向沉 cos(pitch) × (h/2) - h/2。
-///
-/// 当前不画 sprite 自身阴影、release 相机 pitch 固定 = 45°，偏移肉眼
-/// 不太察觉。如果以后要做"脚踩地面特效"或自身阴影对齐，再加一层 local
-/// translation 补偿（每帧按 camera_up 反向平移 h/2）。
+/// 通过 [`ChildOf`] 查父 entity 的 [`GlobalTransform`]，一次拿到
+/// `parent.world_rotation` 和 `parent.world_translation`。详见模块顶部
+/// "父的 world rotation / position 怎么拿"。
 ///
 /// # 假设
 ///
 /// - **单相机**：场景里没有 [`Camera3d`] 或有多个则整帧静默跳过；多相机
 ///   分屏那天再扩展。
 /// - **Rectangle mesh 正面是 +Z**：sprite 的正面贴图朝向局部 +Z 轴。
-/// - **billboard 有父**：无父时退化到 identity 父旋转。本项目所有 sprite
-///   都是 unit 的子，命中此分支等同误用。
+/// - **billboard 有父**：无父时退化到 identity 父旋转 / 原点位置。本
+///   项目所有 sprite 都是 unit 的子，命中此分支等同误用。
+/// - **sprite 跟父 XZ 重合**：项目里 sprite 的 LocalTransform 只在 Y 上
+///   有 offset（脚部锚点抬高），XZ 都是 0；所以用父的 XZ 算 yaw = 用
+///   sprite 自己 XZ 算 yaw。如果以后需要 sprite 在 XZ 上偏离父（武器
+///   挂点等），这里要换成 sprite 自己的 GlobalTransform。
 fn face_camera(
     cameras: Query<&GlobalTransform, (With<Camera3d>, Without<BillboardSprite>)>,
     mut sprites: Query<(&mut Transform, Option<&ChildOf>), With<BillboardSprite>>,
@@ -153,18 +156,25 @@ fn face_camera(
     let Ok(camera_xform) = cameras.single() else {
         return;
     };
-
-    // 目标 world rotation：sprite 三轴 = 相机三轴。
-    // 拿一次就够 —— 所有 sprite 共用同一个目标。
-    let desired_world_rot = camera_xform.rotation();
+    let camera_pos = camera_xform.translation();
 
     for (mut transform, child_of) in &mut sprites {
-        // 直接读父的 world rotation。父没 scale 翻转，rotation() 干净。
-        // 没父时退化到 identity（误用兜底，本项目正常路径不命中）。
-        let parent_world_rot = child_of
+        // 一次查询拿父的 world rotation + world translation。
+        // 父没 scale 翻转，rotation() / translation() 都干净。
+        // 没父时退化到 identity / 原点（误用兜底，本项目正常路径不命中）。
+        let (parent_world_rot, parent_world_pos) = child_of
             .and_then(|c| parents.get(c.parent()).ok())
-            .map(|gt| gt.rotation())
-            .unwrap_or(Quat::IDENTITY);
+            .map(|gt| (gt.rotation(), gt.translation()))
+            .unwrap_or((Quat::IDENTITY, Vec3::ZERO));
+
+        // XZ 平面上算从 sprite 指向相机的方向，反推 yaw。
+        // sprite 的 +Z 应指向相机：atan2(x, z) 给的就是绕 Y 从 +Z 转到
+        // 该方向的角度。dx = dz = 0（相机正在 sprite 正上方）时 atan2
+        // 返回 0，无需特判。
+        let dx = camera_pos.x - parent_world_pos.x;
+        let dz = camera_pos.z - parent_world_pos.z;
+        let yaw = dx.atan2(dz);
+        let desired_world_rot = Quat::from_rotation_y(yaw);
 
         transform.rotation = parent_world_rot.inverse() * desired_world_rot;
     }
