@@ -138,6 +138,10 @@ impl Plugin for GamePlugin {
         app.add_plugins((
             dev::grid::GridPlugin,
             dev::camera::CameraPlugin,
+            // Note: avian 的 `PhysicsDebugPlugin` 走 Bevy `Gizmos`，玩家跑动时
+            // 能看到 collider wireframe 周期性闪烁 (~500ms)。这是 Bevy 0.18
+            // 上游的已知 issue #22438（gizmo asset event timing），在 0.19 以
+            // PR #22964 修复。纯视觉，不影响物理 / 逻辑，暂不绕过。
             dev::physics_debug::PhysicsDebugPlugin,
             //dev::inspector::InspectorPlugin,
         ));

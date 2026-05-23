@@ -59,6 +59,20 @@ F5 / LLDB 那条用 `.vscode/launch.json` 里的 env 把 base 强制指回 bin c
 - ❌ `cargo run --release --features dev` 试图保住 `debug_assertions`：feature 不会改 profile 的 `debug-assertions` 设置，这条 workaround 不成立。
 - ❌ `.cargo/config.toml` 里 `BEVY_ASSET_ROOT = { value = "..", relative = true }`：值是相对 config.toml 所在目录（workspace root）展开的，写 `".."` 会跑到 workspace **外**。正确写法是 `"."`，但既然现在 assets 在 bin crate 里，根本不需要这条 env。
 
+### avian `PhysicsDebugPlugin` 的 collider wireframe 周期性闪一帧
+
+**症状**：玩家持续移动时，身上的 debug body（avian 画的 collider wireframe）**周期性消失一帧**，肉眼大概 ~500ms 一次，方向无关。**没有掉帧**，sprite / 物理 / 逻辑全正常 —— 只有那一层线框在闪。
+
+**很容易误诊为 sprite 问题**（atlas 帧切换、frustum culling、material 重建…）。判别要点：把 `PhysicsDebugPlugin` 从 dev plugins 注掉，闪烁立刻消失 → 确认是 gizmo 层。
+
+**原因**：Bevy 0.18 gizmo pipeline 的时序 race。`update_gizmo_meshes` 在 `Last` schedule 写 `Assets<GizmoAsset>`，但渲染子 app 当帧的 `prepare_assets` 已经跑过了，`queue_line_gizmos_3d` 看不到这个新 asset → 当帧不画。下一帧 `AssetEvent::Modified` 才送达。**持续更新**的 gizmo（移动物体的 wireframe）每帧都重新触发 modified，跟 vsync 形成拍频 → 周期性丢一帧。
+
+**上游已知 issue**：[bevyengine/bevy#22438](https://github.com/bevyengine/bevy/issues/22438)（0.17.3 / 0.18-rc.2 都能复现）。修复 PR [#22964](https://github.com/bevyengine/bevy/pull/22964) 把 `GizmoMeshSystems` 从 `Last` 挪到 `PostUpdate.before(AssetEventSystems)`，milestone = 0.19，**0.18 没有**。
+
+**影响**：**纯视觉**。avian 的 `debug_render_*` 系统只调 `gizmos.draw_*` 写 immediate-mode buffer，渲染端读完就丢，**不写任何 ECS 组件 / `Transform` / `Position` / 战斗状态**。游戏逻辑跟它零相关，碰撞 / 击中判定不会因为 wireframe 少画一帧而漏。
+
+**修复**：不修，等 Bevy 0.19 升级。如果实在碍眼，临时方案是把 `dev::physics_debug::PhysicsDebugPlugin` 从 `lib.rs` 的 dev plugins 注掉 —— 但代价是丢掉所有 collider 可视化，**不值得**为一个视觉小瑕疵换掉整个调试工具。
+
 
 ## Windows 构建 / 调试
 
