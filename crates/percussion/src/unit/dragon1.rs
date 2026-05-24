@@ -22,9 +22,8 @@ use bevy_sprite3d::prelude::*;
 
 pub mod animation;
 
-use super::hitbox::Faction;
-use super::hurtbox::spawn_hurtbox;
-use super::{Body, Health, Strength, UNIT_BODY_HEIGHT, Unit};
+use super::hit_data::Faction;
+use super::{Body, Health, HurtRadius, IsGround, Strength, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
 use crate::physics_layers::GameLayer;
 use crate::sprite_billboard::{BillboardSprite, PIXELS_PER_METER};
@@ -128,11 +127,17 @@ pub fn spawn_dragon1(
         .spawn((
             Dragon1,
             // 阵营 + caster-side 输出系数 —— 跟 [`Player`](super::player::Player)
-            // 保持对称，以便未来 dragon 会攻击时 hitbox 能走同一条
-            // pipeline。现阶段仅 hurtbox 被动受击也不用它们，但提前挂着
-            // 免得加 AI 时再漏东西。
+            // 保持对称，以便未来 dragon 会攻击时能走同一条 strike pipeline。
+            // 现阶段 dragon 只是被动受击，提前挂着免得加 AI 时再漏东西。
             Faction::Enemy,
             Strength(1.0),
+            // damage 视角的圆盘半径 —— strike resolve 算法用。当前初值跟
+            // body capsule 半径一致（视觉上重合），但两个概念独立演化：
+            // body 管挡路 / 撞墙，HurtRadius 管被命中。详见 [`super::HurtRadius`]。
+            HurtRadius(DRAGON1_BODY_RADIUS),
+            // 地面单位 marker —— 飞行 / 灵体单位不带；技能 hits_air=false
+            // 时跳过没有此 marker 的 unit。详见 [`super::IsGround`]。
+            IsGround,
             Transform::from_translation(local_pos),
             // 同 [`spawn_player`](super::player::spawn_player)：父 entity 不渲染，
             // 但 sprite 子 entity 带 `Visibility`，需要父级也有以构成完整
@@ -148,8 +153,8 @@ pub fn spawn_dragon1(
             // [`UNIT_BODY_HEIGHT`] 全场 ground unit 共享，不同 R 互推时接触
             // 法线纯水平，Y 不抽。
             Collider::capsule(DRAGON1_BODY_RADIUS, DRAGON1_BODY_LENGTH),
-            // CollisionLayers 同 player：body 只跟 body / terrain 互推，不
-            // 被 hurtbox / hitbox sensor 干扰。分层详见 [`crate::physics_layers`]。
+            // CollisionLayers 同 player：body 只跟 body / terrain 互推。分层详见
+            // [`crate::physics_layers`]。
             CollisionLayers::new(GameLayer::Body, [GameLayer::Body, GameLayer::Terrain]),
             LockedAxes::ROTATION_LOCKED,
             ChildOf(parent_stage),
@@ -177,15 +182,6 @@ pub fn spawn_dragon1(
         Transform::from_translation(Vec3::new(0.0, DRAGON1_SPRITE_OFFSET_Y, 0.0)),
         ChildOf(entity),
     ));
-
-    // 受击判定：同 [`spawn_player`](super::player::spawn_player)，当前用跟
-    // body 同型的 capsule 覆盖整个角色。
-    spawn_hurtbox(
-        commands,
-        entity,
-        Collider::capsule(DRAGON1_BODY_RADIUS, DRAGON1_BODY_LENGTH),
-        Transform::IDENTITY,
-    );
 
     entity
 }

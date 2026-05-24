@@ -109,7 +109,7 @@ impl PlayerAction {
     ///
     /// | 动作 | active 帧的语义 | 对齐的逻辑窗 |
     /// |---|---|---|
-    /// | Attack | hitbox 存在、判定能命中 | `Skill::active` |
+    /// | Attack | strike 存在、判定能命中 | `Skill::active` |
     /// | Jump | 真正腾空、重力起作用 | `Jump::airborne`（未接） |
     /// | Idle / Run | —— 没有内部阶段 | `None` |
     ///
@@ -306,7 +306,7 @@ fn decide_player_action(
 /// pre 段在 `skill.windup` 秒内线性播完 `active_frames.start - range.start` 帧；
 /// active 段在 `skill.active` 秒内线性播完伤害帧区间；post 段在 `skill.recovery`
 /// 秒内线性播完剩下的帧。三段各自的局部 fps **独立**，这才能保证“active
-/// 子区间恰好播于 skill 的 Active 阶段里”——于是 hitbox spawn (靠 Skill phase 发
+/// 子区间恰好播于 skill 的 Active 阶段里”——于是 strike spawn (靠 Skill phase 发
 /// SkillActivatedMessage 触发) 与画面上接触完美对齐。
 ///
 /// `SkillCast` 不在时（Idle / Run / Jump）按各自的常量 fps 推进。

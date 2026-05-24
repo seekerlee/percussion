@@ -11,14 +11,12 @@
 //!
 //! | 触发条件 | 代码位置 | 备注 |
 //! |---|---|---|
-//! | lifetime 倒计时归零 | [`crate::unit::hitbox`] | hitbox 子系统自带的 `tick_hitbox_lifetime` |
-//! | 命中 hurtbox（敌人） | [`super`]（`projectile.rs`） | `despawn_on_hit` 读 `HitboxHits` 非空触发 |
+//! | lifetime 倒计时归零 | [`super`]（`projectile.rs`） | `detect_projectile_hits` 每帧扣 `remaining` |
+//! | XZ 距离命中敌方单位 | [`super`]（`projectile.rs`） | `detect_projectile_hits` 命中后发消息 + despawn |
 //! | 撞 terrain（墙） | 本模块 | 这里的 `advance_linear_motion` |
 //!
-//! 命中 hurtbox 这条线之所以**不**走本模块，是因为投射物 entity 本身就是
-//! 一块 hitbox（见 [`super`] 模块文档），hitbox 子系统通过 sensor +
-//! `CollidingEntities` 已经检测好"哪些 hurtbox 跟我重叠"并发了
-//! `CollisionMessage`，再在轨迹模块重做一次反而割裂。
+//! 命中敌方这条线走 [`super`] 是因为它是数值点-距离判定（跟轨迹无关）；
+//! 撞墙走本模块是因为它要靠轨迹该帧的位移 sweep。
 //!
 //! # 撞墙判定为什么归轨迹模块
 //!
@@ -60,8 +58,7 @@ pub struct LinearMotion(pub Vec3);
 /// 2. 用 [`SpatialQuery::cast_shape`] 从当前位置朝 `delta` 方向扫，距离
 ///    为 `delta.length()`，filter 仅 [`GameLayer::Terrain`]
 /// 3. 命中 → 立即 despawn（不更新 transform —— 投射物视觉上停在出发位置
-///    那一帧，然后消失；视觉短促可接受；不动 transform 避免最后一帧
-///    sensor 误命中后面的 hurtbox）
+///    那一帧，然后消失）
 /// 4. 未命中 → `transform.translation += delta`，让 avian 在
 ///    [`PhysicsSystems::Prepare`] 阶段把 Transform 同步到 Position
 ///

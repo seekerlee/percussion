@@ -100,8 +100,6 @@ impl Plugin for GamePlugin {
         .add_plugins((
             unit::UnitPlugin,
             unit::movement::MovementPlugin,
-            unit::hurtbox::HurtboxPlugin,
-            unit::hitbox::HitboxPlugin,
             // Damage pipeline 的 3 个新阶段插件 —— UnitPlugin 已经在
             // `DamagePipeline` set 上拉好链；这里只是把 system 塞进对应 set。
             // 注册顺序无关（set 之间的 happens-before 由 chain() 决定），按
@@ -111,7 +109,8 @@ impl Plugin for GamePlugin {
             unit::hit_triggers::HitTriggersPlugin,
             unit::burning::BurningPlugin,
             unit::skill::SkillPlugin,
-            unit::skill_hitbox::SkillHitboxPlugin,
+            unit::skill_strike::SkillStrikePlugin,
+            unit::strike::StrikePlugin,
             projectile::ProjectilePlugin,
             sprite_billboard::BillboardPlugin,
             // bevy_sprite3d：3D 场景里的 2D sprite（Delver / 饥荒风）通
@@ -228,10 +227,8 @@ fn spawn_initial_scene(
     );
 
     // 在 stage 内排一个 5 × 4 = 20 个 player 的网格，覆盖屏幕中心 → 四角，
-    // 用来肉眼检查 sprite billboard 在屏幕各位置的视觉对齐（Y 轴 billboard
-    // 下，边缘 sprite 应该跟 hurtbox wireframe 一致 lean）。所有 Player
-    // 共享 input system 会一起动，方便观察"运动中的 sprite 跟 collider
-    // 是否始终对齐"。
+    // 用来肉眼检查 sprite billboard 在屏幕各位置的视觉对齐。所有 Player
+    // 共享 input system 会一起动，方便观察运动中的视觉对齐。
     //
     // stage 是 20m × 15m，X ∈ [-10, 10]、Z ∈ [-7.5, 7.5]；
     // 取 X = [-8, -4, 0, 4, 8]（5 列）× Z = [-6, -2, 2, 6]（4 行），

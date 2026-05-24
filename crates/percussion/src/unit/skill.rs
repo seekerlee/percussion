@@ -2,7 +2,6 @@
 //!
 //! This file is intentionally standalone for now:
 //! - It does NOT modify existing plugin wiring.
-//! - It does NOT depend on a hitbox module yet.
 //! - It does NOT include channeling logic.
 //!
 //! Once approved, this plugin can be wired from existing modules.
@@ -24,7 +23,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 
 use super::Strength;
-use super::hitbox::{DamageModifier, HitSpec};
+use super::hit_data::{DamageModifier, HitSpec};
 
 // ============================================================================
 // 数据流总览：intent → cache，由 recompute 系统单向推导
@@ -36,7 +35,7 @@ use super::hitbox::{DamageModifier, HitSpec};
 //   <future: Buffs>       ─┤           （Update 头部）        ▲
 //   <future: Equipped>    ─┘                                  │
 //                                                             │
-//                                cast / hitbox 系统只读 ──────┘
+//                                cast / strike 系统只读 ──────┘
 // ```
 //
 // **intent**（[`SkillKindSet`]）= "这个 caster 会哪些招"，玩法层写。
@@ -47,7 +46,7 @@ use super::hitbox::{DamageModifier, HitSpec};
 //   一连串 `apply_xxx` 重算。
 //
 // 哲学：
-// - cast / hitbox 子系统**只读 SkillBook**，不再去 join 其他 caster 组件
+// - cast / strike 子系统**只读 SkillBook**，不再去 join 其他 caster 组件
 //   聚合数值。"力量加多少伤害"这种数值知识集中在 recompute 里一处。
 // - 玩法层只动 intent / source（学会招式、上 buff、换装备）；不直接写
 //   SkillBook。SkillBook 由 recompute 自动跟上。
@@ -94,46 +93,51 @@ pub struct Skill {
 /// 在 `Facing::Left` 时所有"沿 X 轴"的字段语义都翻一遍，让人糊涂。
 #[derive(Debug, Clone)]
 pub enum SkillEffectKind {
-    /// 一块**贴在 caster 身前**的长方体判定盒，跟着 [`Facing`] 转向。
+    /// **沿 [`Facing`] 朝前的一段直线** —— "一刀能挥多远"。
     ///
-    /// 几何约定（俯视图，caster 朝 +X 时）：
+    /// 几何约定（俯视图，caster 朝 +X 时）：caster 中心 P 出发，沿
+    /// +X 走 `offset.x` 抵达"判定中心"，再向前 `reach/2` 是攻击边界。
     ///
     /// ```text
     ///       +Z ↑
-    ///          │             ┌──────────────┐ ← center.z + swing/2
-    ///          │             │              │
-    ///   ── ● ──┼─────────────┤   MeleeBox   ├──→ +X (facing)
-    ///      P   │             │      ●       │
-    ///          │             └──────────────┘ ← center.z - swing/2
-    ///          │             ↑      ↑       ↑
-    ///          │ ←─ off.x ──→│   center      │
-    ///          │             ←──── reach ───→
+    ///          │
+    ///          │
+    ///   ── ● ──┼─────── center ──────────●  ← 攻击最远点（offset.x + reach/2）
+    ///      P   │       (offset.x)
+    ///          │
     /// ```
     ///
-    /// Y 方向的 box 中心默认贴 caster 中心；想做"扫腿" / "高位斩"再加 `offset_y`。
-    MeleeBox {
+    /// 桥接 system（[`super::skill_strike`]）把它翻译成
+    /// [`AttackEffect::MeleeReach`](super::strike::AttackEffect::MeleeReach)
+    /// 的圆形点-距判定：在以 `(offset.x + reach/2)` 为半径的圆里找最
+    /// 近目标。当前实现**忽略 reach 后半段**视觉宽度差异（横扫 vs 直
+    /// 刺手感等价）—— 单段距离判定够首版。
+    ///
+    /// **TODO（扇形 / 锥形扩展）**：要做"横扫 vs 直刺"或"扇形 AoE"，
+    /// 加新 variant（如 `MeleeFan { reach, half_angle, offset, on_hit }`
+    /// / `Aoe { radius, cone, on_hit }`），bridge 翻成
+    /// [`AttackEffect::Aoe`](super::strike::AttackEffect::Aoe) +
+    /// [`Cone`](super::strike::Cone)（已就位）。**不要**把扇形参数加
+    /// 回 `MeleeReach` —— 那会把"直线"和"扇形"两种语义糊在一起。
+    MeleeReach {
         /// 沿 facing 方向的全长 —— **攻击够多远**（剑的长度 / 体术伸臂）。
         reach: f32,
-        /// 垂直 facing 方向的全长 —— **横扫多宽**（横扫 vs 直刺）。
-        swing: f32,
-        /// Y 方向全长 —— **罩多高**（罩住整个人 vs 扫腿低位）。
-        height: f32,
-        /// caster 中心 → box 中心 的位移，**caster 平面内**。
+        /// caster 中心 → 判定中心 的位移，**caster 平面内**。
         ///
-        /// - `x`：沿 facing（正 = 朝前）。`x == reach/2` 时 box 近边贴 caster 体表。
+        /// - `x`：沿 facing（正 = 朝前）。`x == reach/2` 时判定近边
+        ///   贴 caster 体表。
         /// - `y`：垂直 facing（正 = facing 左手侧）。绝大多数招式 = 0,
-        ///   非零用于"侧击" / 不对称挥砍。
+        ///   非零用于"侧击" / 不对称挥砍。当前 `MeleeReach` 桥接
+        ///   只读 `offset.x`；`offset.y` 等扇形 variant 加入再启用。
         ///
-        /// 用 `Vec2` 而不是 `Vec3`：Y 方向偏移目前没用上，等真做"扫腿"再补。
+        /// 用 `Vec2` 而不是 `Vec3`：俯视战斗里 Y 偏移留给"扫腿 / 跳劈"
+        /// 这种 Y 区分需求出现时再补。
         offset: Vec2,
         /// 命中后果（伤害 / buff / 击退 …）的**声明性描述**。
         ///
-        /// 见 [`HitSpec`] —— 桥接 system 会把它翻译成 spawn 出来的 hitbox
-        /// entity 上的一组 `OnHit-*` 组件，每种组件由独立的 handler system
-        /// 处理。这样：
-        /// - 简单效果（damage）= 加字段
-        /// - 复杂效果（命中给自己 buff、命中爆炸）= 加字段 + 1 component + 1 system，
-        ///   彼此互不污染
+        /// 见 [`HitSpec`] —— 桥接 system 用它构造 [`Strike`] 的
+        /// `on_hit`，命中那一刻 clone 进 `CollisionMessage`，下游
+        /// modifier / trigger 流水线消费。
         on_hit: HitSpec,
     },
 }
@@ -156,17 +160,12 @@ fn template(kind: SkillKind) -> Skill {
             windup: 0.10,
             active: 0.05,
             recovery: 0.15,
-            effect: SkillEffectKind::MeleeBox {
+            effect: SkillEffectKind::MeleeReach {
                 reach: 1.4,
-                swing: 1.2,
-                // 1.8 = 默认站立 unit body 高度，整个人罩住。等做"扫腿" /
-                // "高位斩"这种 Y 上有差异的招式时再调小 + 配合 box 中心
-                // Y 偏移（暂未实现）。
-                height: 1.8,
-                // x = reach/2 + 0.0：box 近边正好贴 caster 体表。
+                // x = reach/2 + 0.0：判定近边正好贴 caster 体表。
                 offset: Vec2::new(0.7, 0.0),
                 // 首版只挂裸伤害：modifiers / triggers 都空。
-                // bridge 在 spawn hitbox 时会按 caster.Strength 等 prepend
+                // bridge 在 spawn strike 时会按 caster.Strength 等 prepend
                 // [`DamageModifier::Mul`] 到 modifiers 头部 —— 模板本身
                 // 不需要预声明 caster-side 修正。
                 on_hit: HitSpec {
@@ -284,7 +283,8 @@ pub struct CastSkillRequest {
 
 /// Fired once when a cast enters Active phase.
 ///
-/// A future hitbox/projectile module can subscribe to this and spawn effects.
+/// [`super::skill_strike`] / [`crate::projectile`] subscribe to this and spawn
+/// effects (Strike entity / projectile).
 ///
 /// **不再是 `Copy`**：[`SkillEffectKind`] 内含 [`HitSpec`]（持有 Vec），
 /// 自然不能 Copy。消费方对 `ev: &SkillActivatedMessage` 用 `match &ev.effect`
@@ -312,7 +312,7 @@ impl Plugin for SkillPlugin {
                 (
                     // recompute 必须在 cast / activate 系统之前 —— 这样
                     // intent / source 同帧变化能立刻反映到本帧的施法 +
-                    // hitbox spawn。skill_hitbox 的 bridge 也读 SkillBook
+                    // strike spawn。skill_strike 的 bridge 也读 SkillBook
                     // 拿 active 时长，链头放 recompute 同样保险。
                     recompute_skill_book,
                     tick_skill_cooldowns,
@@ -370,9 +370,9 @@ fn compute_skill(kind: SkillKind, strength: Option<&Strength>) -> Skill {
     skill
 }
 
-/// 把 caster [`Strength`] 烧进招的 hit 输出 modifier。
+/// 把 caster [`Strength`] 烙进招的 hit 输出 modifier。
 ///
-/// 当前只对 [`SkillEffectKind::MeleeBox`] 的 `on_hit` 起作用 —— 因为目前
+/// 当前只对 [`SkillEffectKind::MeleeReach`] 的 `on_hit` 起作用 —— 因为目前
 /// 只有这一种 effect。加新 effect kind 时如果它也产生伤害，需要在这里
 /// 加一个 match 分支把 strength 注入它的 [`HitSpec`]。
 ///
@@ -384,7 +384,7 @@ fn apply_strength(skill: &mut Skill, strength: Option<&Strength>) {
         return;
     }
     match &mut skill.effect {
-        SkillEffectKind::MeleeBox { on_hit, .. } => {
+        SkillEffectKind::MeleeReach { on_hit, .. } => {
             // prepend：caster-side 整体倍率先 apply，让后续 modifier
             // （buff / 命中端加成）作用在已放大的结果上。
             on_hit.modifiers.insert(0, DamageModifier::Mul(s));

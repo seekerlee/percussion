@@ -1,18 +1,18 @@
 //! Burning —— 持续掉血 debuff。
 //!
-//! 由 [`HitTrigger::Burn`](super::hitbox::HitTrigger::Burn) 在命中时挂到目标
+//! 由 [`HitTrigger::Burn`](super::hit_data::HitTrigger::Burn) 在命中时挂到目标
 //! 身上。本模块负责每帧扣血 + 到期自动清除。
 //!
 //! # 为什么不走 damage_calc pipeline
 //!
 //! Burning 已经是"过去某次命中的衍生物"—— 那次命中的暴击 / 武器倍率 /
-//! caster.Strength 在 spawn 时就已经烧进了 Burn 的 dps（trigger 的设计者
+//! caster.Strength 在 spawn 时就已经烙进了 Burn 的 dps（trigger 的设计者
 //! 自己决定 dps 是 final_amount × x 还是固定值）。所以正在 tick 的 DoT
 //! 不应该**再**吃一次 caster-side modifier。
 //!
 //! 若将来要让 DoT 受 target-side 抗火 / 易燃 buff 影响，更好的做法是让
-//! [`tick_burning`] 改发 [`CollisionMessage`](super::hitbox::CollisionMessage)
-//! 到一个"虚拟 hitbox" —— 但首版不做。
+//! [`tick_burning`] 改发 [`CollisionMessage`](super::hit_data::CollisionMessage)
+//! 到一个"虚拟来源" —— 但首版不做。
 //!
 //! # 在 pipeline 里的位置
 //!
@@ -30,7 +30,7 @@ use super::{DamagePipeline, Dead, Health};
 
 /// 持续掉血的 debuff 组件。
 ///
-/// 由 [`HitTrigger::Burn`](super::hitbox::HitTrigger::Burn) 挂上；
+/// 由 [`HitTrigger::Burn`](super::hit_data::HitTrigger::Burn) 挂上；
 /// [`tick_burning`] 每帧扣血 + 倒计时 + 到期清除。
 #[derive(Component, Debug, Clone)]
 pub struct Burning {

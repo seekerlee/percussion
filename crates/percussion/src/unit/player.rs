@@ -23,11 +23,10 @@ use bevy_sprite3d::prelude::*;
 pub mod animation;
 
 use super::facing::Facing;
-use super::hitbox::Faction;
-use super::hurtbox::spawn_hurtbox;
+use super::hit_data::Faction;
 use super::movement::MoveVelocity;
 use super::skill::{CastSkillRequest, SkillKind, SkillKindSet};
-use super::{Body, Dead, Health, Strength, UNIT_BODY_HEIGHT, Unit};
+use super::{Body, Dead, Health, HurtRadius, IsGround, Strength, UNIT_BODY_HEIGHT, Unit};
 use crate::app_state::AppState;
 use crate::physics_layers::GameLayer;
 use crate::projectile::spawn_linear_projectile;
@@ -199,8 +198,15 @@ pub fn spawn_player(
             // SkillBook 里每招的 HitSpec.modifiers 头部。玩家初始 1.0
             // （无加成），未来装备 / buff 会修改。
             Strength(1.0),
-            // 阵营 —— 技能 / hitbox / 友冷过滤 未来都会读。玩家总是 Player 阵营。
+            // 阵营 —— 技能 / 友冷过滤 未来都会读。玩家总是 Player 阵营。
             Faction::Player,
+            // damage 视角的圆盘半径 —— strike resolve 算法用。当前初值跟
+            // body capsule 半径一致（视觉上重合），但两个概念独立演化：
+            // body 管挡路 / 撞墙，HurtRadius 管被命中。详见 [`super::HurtRadius`]。
+            HurtRadius(PLAYER_BODY_RADIUS),
+            // 地面单位 marker —— 飞行 / 灵体单位不带；技能 hits_air=false
+            // 时跳过没有此 marker 的 unit。详见 [`super::IsGround`]。
+            IsGround,
             Transform::from_translation(local_pos),
             // 父 entity 自身不渲染，但 sprite 子 entity 带 `Visibility`
             // （`Sprite3d` 隐式 require）。Bevy 的可见性沿 hierarchy 继承，
@@ -217,8 +223,7 @@ pub fn spawn_player(
             // ground unit 共享，这里只需在调用点拼出 cylinder 段长度。
             Collider::capsule(PLAYER_BODY_RADIUS, PLAYER_BODY_LENGTH),
             // CollisionLayers：membership = Body，filter = [Body, Terrain]。
-            // body 只跟其他 unit body 和地形互推，跳过 hurtbox / hitbox
-            // —— 避免被自己的受击盒顶起来、避免被友军攻击 sensor 推开。
+            // body 只跟其他 unit body 和地形互推，其他层都不参与。
             CollisionLayers::new(GameLayer::Body, [GameLayer::Body, GameLayer::Terrain]),
             // 防止被撞翻滚 —— 俯视斜角游戏角色应保持站立。不锁
             // 转动会被击飞 / 撞压之类的接触带动。Kinematic 下其实
@@ -260,17 +265,6 @@ pub fn spawn_player(
         Transform::from_translation(Vec3::new(0.0, PLAYER_SPRITE_OFFSET_Y, 0.0)),
         ChildOf(player_entity),
     ));
-
-    // 受击判定：现阶段用跟 body 同型的 capsule 作为整块受击区，
-    // 简单覆盖角色。未来要分头 / 身 / 腿不同倍率时可多次调
-    // `spawn_hurtbox` 贴多块，或者让 hurtbox transform 随动作变。
-    // 当前不预先抽象。
-    spawn_hurtbox(
-        commands,
-        player_entity,
-        Collider::capsule(PLAYER_BODY_RADIUS, PLAYER_BODY_LENGTH),
-        Transform::IDENTITY,
-    );
 
     player_entity
 }
@@ -327,7 +321,7 @@ fn player_movement(
 
 /// 按 `Space` 给玩家一次 10 点伤害 —— 这是**调试合成伤害**，直接写
 /// [`Health::current`]，**不走**正规的 [`DamagePipeline`](super::DamagePipeline)
-/// 流水线：没有 caster / hitbox 来源，伪造一条 `DamageDealtMessage` 反而
+/// 流水线：没有真实的 caster / 命中来源，伪造一条 `DamageDealtMessage` 反而
 /// 让下游的 trigger / 统计系统看到一个虚假 caster Entity，多一层坑。
 /// 调试键就应该是"跳过中间环节、直接验证结果"。
 ///
@@ -370,7 +364,7 @@ fn debug_revive_player_on_r(
 }
 
 /// 按 `F` 发射一发匀速直线投射物 —— 绕开未来的技能 / 输入映射层，
-/// 直接验证投射物子系统打通（spawn → 飞行 → 命中 hurtbox / terrain →
+/// 直接验证投射物子系统打通（spawn → 飞行 → 命中敌人 / terrain →
 /// despawn）。方向取自 [`Facing`]：右 = +X，左 = -X。
 ///
 /// 只在 debug build 编译。
@@ -396,8 +390,8 @@ fn debug_fire_projectile_on_f(
             Facing::Right => Vec3::X,
             Facing::Left => Vec3::NEG_X,
         };
-        // 出膛位置：略前于角色，避免 spawn 当帧就命中自己（其实 hitbox
-        // 子系统的 owner 过滤已经会拦，但视觉上让它从身前飞出更自然）。
+        // 出膋位置：略前于角色，避免 spawn 当帧就命中自己（其实 projectile
+        // 的 owner 过滤已经会拦，但视觉上让它从身前飞出更自然）。
         let origin = transform.translation + dir * 0.5;
         let velocity = dir * 10.0; // 占位速度，调参等真出现远程攻击再说。
         spawn_linear_projectile(

@@ -152,9 +152,50 @@ pub const UNIT_BODY_HEIGHT: f32 = 2.0;
 #[require(MoveVelocity, OnGround)]
 pub struct Body;
 
-/// 角色的"攻击力"系数 —— 让 hitbox spawn 时把 caster 的整体输出系数烧
-/// 进 [`hitbox::HitSpec`] 的 modifier 流水线里（详见
-/// [`skill_hitbox`](crate::unit::skill_hitbox) 的 bridge system）。
+/// 受击半径 —— **damage 视角**下该 unit 的圆盘大小（米）。
+///
+/// 这是命中判定算 `dist(attacker, target) <= attacker.reach + target.hurt_radius`
+/// 时右边那一项。**跟 [`Body`] capsule 的几何半径是不同概念**，不要混淆:
+///
+/// | 概念 | 回答的问题 | 谁来读 |
+/// |---|---|---|
+/// | `Body` capsule | 我占多大体积、能不能挤过去、撞不撞墙 | avian 移动 / 推挤 / 撞墙 |
+/// | `HurtRadius` | 我多大范围算"被命中"（数值化圆盘表征） | strike resolve 算法 |
+///
+/// 初始数值可以跟 body capsule 半径相同（视觉一致），但**演化路径完全独立**：
+/// 比如想给"满血龙"一个比 body 更大的受击面（更易被远程命中、平衡用），
+/// 或者反过来给"灵活刺客"小受击面而 body 不变，都只动这个值，不动 body
+/// collider；反之巨型怪要更难推过去（大 body）但受击面不变（HurtRadius
+/// 不变），物理 / 数值各调各的，互不污染。
+///
+/// 飞行 / 地面单位都需要 `HurtRadius` —— 受击半径跟"在不在地上"无关；
+/// 地空判定走 [`IsGround`] marker 单独标。
+#[derive(Component, Debug, Clone, Copy)]
+pub struct HurtRadius(pub f32);
+
+/// 标记 unit 是**地面单位**。飞行 / 灵体单位**不**带这个 marker。
+///
+/// 用于"对地 / 对空"技能过滤：技能数值里带一个 `hits_air: bool`，strike
+/// resolve 算法据此选择是否命中没有 `IsGround` 的 unit。当前 percussion 是
+/// top-down 自动战斗刷子，地空只做**离散二分** —— 不做高度细分，也不做
+/// "扫腿不扫头"那种纵向精度。
+///
+/// 跟 [`Body`] / [`HurtRadius`] 都正交：飞行单位可以有 [`Body`]（占体积，
+/// 不撞墙的飞兵也得占空），可以有 `HurtRadius`（要被打中），但**没有**
+/// `IsGround`。
+///
+/// 选 marker 而不是 `Tier(Ground | Air)` enum 是因为：
+/// 1. 当前只有"地"vs"非地"二分，enum 二分等价 marker 在不在；
+/// 2. marker 直接在 query filter（`With<IsGround>` / `Without<IsGround>`）里用，
+///    比 enum match 顺手；
+/// 3. 真出现"水下""攀墙"等第三态时再升级 enum，简单到那时再说。
+#[derive(Component, Debug, Default)]
+pub struct IsGround;
+
+/// 角色的"攻击力"系数 —— 让 [`Strike`](strike::Strike) /
+/// [`Projectile`](crate::projectile::Projectile) spawn 时把 caster 的整体输出
+/// 系数烙进 [`HitSpec`](hit_data::HitSpec) 的 modifier 流水线里（详见
+/// [`skill_strike`](crate::unit::skill_strike) 的 bridge system）。
 ///
 /// 这是个**示例性**的 caster-side 通用 stat —— 真正决定一个角色"打多痛"
 /// 的远不止这一个 stat（武器加成、状态加成、buff、暴击率……）。目前
@@ -176,23 +217,24 @@ pub struct Strength(pub f32);
 /// 替代了旧版的 `DamageMessage` —— 旧消息是"我请求扣血"，本消息是"血
 /// 已经扣完了"。语义反转：从"伤害源声明"→"权威结算结果"，后段 system
 /// 拿到就直接用，不用再担心 race / 重复结算。
-#[derive(Message, Debug, Clone, Copy)]
+///
+/// **自包含 `triggers`**（clone in），让 [`hit_triggers`] 无需反查来源
+/// entity。原因详见 [`CollisionMessage`](hit_data::CollisionMessage) 同款理由。
+#[derive(Message, Debug, Clone)]
 pub struct DamageDealtMessage {
-    /// 攻击发起者（hitbox.owner）。trigger 系统需要它来回写 caster
-    /// （吸血加血）。
+    /// 攻击发起者。trigger 系统需要它来回写 caster（吸血加血）。
     pub caster: Entity,
     /// 受伤的 entity。
     pub target: Entity,
-    /// 触发本次结算的 hitbox entity —— 让 trigger 系统可以反查
-    /// [`hitbox::HitSpec::triggers`]。hitbox 可能在同一帧已被 despawn
-    /// （短 lifetime），消费方需用 `q.get(hitbox).ok()` 优雅处理 miss。
-    pub hitbox: Entity,
     /// 最终扣掉的血量（被 `(current - amount).max(0.0)` clamp 之前的值；
     /// 吸血等比例 trigger 应该按这个算）。
     pub final_amount: f32,
     /// 这次结算 modifier 流水线是否触发了暴击。`CritOnly` trigger 用它
     /// 判定是否启动条件分支。
     pub is_crit: bool,
+    /// 命中后挂的 trigger 列表 —— 从来源 spec clone 进来。`hit_triggers`
+    /// 直接遍历，不再查 [`Strike`](strike::Strike)。
+    pub triggers: Vec<hit_data::HitTrigger>,
 }
 
 /// Unit 死亡通知 —— [`transition_to_dead`] 给某个 unit 挂上 [`Dead`] marker
@@ -211,7 +253,7 @@ pub struct UnitDiedMessage {
 /// 成一条流水线，单点定义顺序，比每个 system 各自 `.before()/.after()`
 /// 链清晰得多。
 ///
-/// 设计哲学："hitbox 命中→伤害结算→trigger 派发→死亡转移" 是一条逻辑
+/// 设计哲学："命中检测→伤害结算→trigger 派发→死亡转移" 是一条逻辑
 /// 上不可乱序的流水线。每段产物喂下一段消费，并发性能不是这里的瓶颈
 /// （单帧整条 < 1ms），所以**顺序优先于并发**。
 ///
@@ -220,8 +262,8 @@ pub struct UnitDiedMessage {
 /// `chain()` 元组里放到正确位置即可。
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DamagePipeline {
-    /// [`hitbox`] 扫物理 sensor，把命中翻译成
-    /// [`CollisionMessage`](hitbox::CollisionMessage)。
+    /// [`strike`] / [`crate::projectile`] 按 XZ 距离扫出命中，发
+    /// [`CollisionMessage`](hit_data::CollisionMessage)。
     DetectCollision,
     /// [`damage_calc`] 跑 modifier 流水线，把最终伤害扣到
     /// [`Health`]，发 [`DamageDealtMessage`]。
@@ -246,7 +288,8 @@ pub struct UnitPlugin;
 
 impl Plugin for UnitPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<DamageDealtMessage>()
+        app.add_message::<hit_data::CollisionMessage>()
+            .add_message::<DamageDealtMessage>()
             .add_message::<UnitDiedMessage>()
             // 把整条 damage pipeline 的 5 个 set 串成一条链。各 set 内部
             // 由对应 module 的 plugin 自家 system 填充。`chain()` 让相
@@ -347,10 +390,10 @@ pub mod burning;
 pub mod damage_calc;
 pub mod dragon1;
 pub mod facing;
+pub mod hit_data;
 pub mod hit_triggers;
-pub mod hitbox;
-pub mod hurtbox;
 pub mod movement;
 pub mod player;
 pub mod skill;
-pub mod skill_hitbox;
+pub mod skill_strike;
+pub mod strike;

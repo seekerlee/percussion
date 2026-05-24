@@ -125,7 +125,7 @@
     // alternation 进中间捕获组即可（注意：trait 名要满足 word boundary，
     // 不能跟其他 derive 子串前后粘连）。
     "highlight.regexes": {
-        "(#\\[derive\\([^)]*\\b)(Component|Resource|Event|Bundle|States|SubStates|ScheduleLabel|SystemSet|SystemParam|Asset|Reflect|TypePath|Relationship|RelationshipTarget|QueryData|QueryFilter)(\\b[^)]*\\))": {
+        "(#\\[derive\\([^)]*\\b)(Component|Resource|Event|Bundle|States|SubStates|ScheduleLabel|SystemSet|SystemParam|Asset|Reflect|TypePath|Relationship|RelationshipTarget|QueryData|QueryFilter|Message)(\\b[^)]*\\))": {
             "filterLanguageRegex": "rust",
             "decorations": [
                 {},

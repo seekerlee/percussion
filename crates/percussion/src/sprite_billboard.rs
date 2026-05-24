@@ -19,21 +19,20 @@
 //! 「**Full billboard**」让 sprite 的 plane 跟相机 image plane 完全平行
 //! （sprite world rotation = camera world rotation）：屏幕上 sprite 永远
 //! 是正立矩形。代价是 sprite 在 world 里跟着相机一起斜着躺，**跟世界
-//! 垂直的 hurtbox / body collider 是两套坐标系**。透视相机下，hurtbox
-//! 的顶端会朝屏幕中心顶部消失点轻微倾斜（投影几何固有），而 sprite
-//! 永远屏幕正立 —— 越往屏幕边缘错位越大，视觉上"sprite 跟 hitbox 不
-//! 对齐"，玩家会觉得"我躲开了为什么还吃伤害"。
+//! 垂直的 body collider 是两套坐标系**。透视相机下， body 的顶端会朝屏
+//! 幕中心顶部消失点轻微倾斜（投影几何固有），而 sprite 永远屏幕正立 ——
+//! 越往屏幕边缘错位越大，视觉上"sprite 跟 collider 不对齐"。
 //!
 //! 「**Y 轴 billboard**」（即本模块当前实现）只把 sprite 在水平面 yaw
-//! 转向相机，sprite 在 world 里**始终垂直于地面**，跟 hurtbox / body 处于
-//! 同一坐标系。透视相机下，整个 3D 世界（包括 sprite、hurtbox、地面网格、
-//! 未来的特效）一起朝屏幕边缘消失点 lean —— 自洽，眼睛自动把它读成
-//! "哦这是 3D 透视"，错位感消失。WC3 / 饥荒 / Hades 都是这套：3D 单位
-//! 配 2D 贴图，都在世界坐标里一起 lean。
+//! 转向相机，sprite 在 world 里**始终垂直于地面**，跟 body 处于同一坐标系。
+//! 透视相机下，整个 3D 世界（包括 sprite、地面网格、未来的特效）一起
+//! 朝屏幕边缘消失点 lean —— 自洽，眼睛自动把它读成"哦这是 3D 透视"，
+//! 错位感消失。WC3 / 饥荒 / Hades 都是这套：3D 单位配 2D 贴图，都在世界
+//! 坐标里一起 lean。
 //!
 //! 代价：屏幕边缘的 sprite 视觉上轻微 lean（lean 角度跟 camera FOV + 屏幕
 //! 偏移成正比）。当前 [`CAMERA_FOV_DEG = 30`](crate::CAMERA_FOV_DEG) 下
-//! 边缘 lean ≈ 5°，肉眼难察觉；且和 hurtbox lean 方向一致，反而强化
+//! 边缘 lean ≈ 5°，肉眼难察觉；且和 body lean 方向一致，反而强化
 //! "sprite 是一个 3D 物体"的认知。
 //!
 //! # 父的 world rotation / position 怎么拿
@@ -118,7 +117,7 @@ impl Plugin for BillboardPlugin {
 /// 在 XZ 平面上、从 sprite（用父的世界 XZ）指向相机的水平方向：
 ///
 /// - sprite 局部 +Z → 相机方向（投影到 XZ 平面后）→ sprite 贴图正面对相机
-/// - sprite 局部 +Y → world +Y → sprite 永远世界垂直（跟 hurtbox 同坐标系）
+/// - sprite 局部 +Y → world +Y → sprite 永远世界垂直（跟 body collider 同坐标系）
 /// - sprite 局部 +X → yaw 旋转后的水平方向，配合 `scale.x = ±1` 镜像翻转
 ///   仍然把屏幕左右映射到角色左右（见 `tick_player_animation`）
 ///

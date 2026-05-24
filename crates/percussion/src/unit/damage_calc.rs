@@ -2,17 +2,17 @@
 //!
 //! # 在 pipeline 里的位置
 //!
-//! 上游：[`hitbox::detect_hitbox_collisions`](super::hitbox::detect_hitbox_collisions)
+//! 上游：[`strike::resolve_strikes`](super::strike::resolve_strikes) 跟
+//! [`projectile::detect_projectile_hits`](crate::projectile::detect_projectile_hits)
 //! 在 [`DamagePipeline::DetectCollision`](super::DamagePipeline::DetectCollision)
-//! 阶段把"hitbox 撞 hurtbox"翻译成
-//! [`CollisionMessage`](super::hitbox::CollisionMessage)。
+//! 阶段用数值点-距离判定发出 [`CollisionMessage`](super::hit_data::CollisionMessage)。
 //!
 //! 本模块在 [`DamagePipeline::ApplyDamage`](super::DamagePipeline::ApplyDamage)
 //! 阶段：
 //!
-//! 1. 读 [`CollisionMessage`](super::hitbox::CollisionMessage) → 拿 hitbox / target；
-//! 2. 读 hitbox 的 [`HitSpec`](super::hitbox::HitSpec) —— `base_damage` 起跑，
-//!    沿 `modifiers` 串行跑流水线（每个 [`DamageModifier`](super::hitbox::DamageModifier)
+//! 1. 读 [`CollisionMessage`](super::hit_data::CollisionMessage) → 拿 caster / target；
+//! 2. 读消息里的 [`HitSpec`](super::hit_data::HitSpec) —— `base_damage` 起跑，
+//!    沿 `modifiers` 串行跑流水线（每个 [`DamageModifier`](super::hit_data::DamageModifier)
 //!    一步），同时记录 `is_crit`；
 //! 3. 把最终伤害扣到目标 [`Health::current`](super::Health) 上（clamp 到 0）；
 //! 4. 发一条 [`DamageDealtMessage`](super::DamageDealtMessage) —— 后续的
@@ -32,21 +32,20 @@
 //! `match` arm。
 //!
 //! 同理 [`hit_triggers`](super::hit_triggers) 也是一个胖 `match`。区别只是
-//! trigger 互不依赖，理论上可以并发，但 N 个 system 各自查 hitbox.spec.triggers
+//! trigger 互不依赖，理论上可以并发，但 N 个 system 各自查消息中的 triggers
 //! 找自己关心的 variant 反而是 N 倍 query 开销 —— 还不如一次 match 派发完。
 //!
 //! # 目标已死怎么办
 //!
-//! `Without<Dead>` filter 直接 miss → 不写血、不发 DamageDealt。Hitbox 当下
-//! 通过 [`HitboxHits`](super::hitbox::HitboxHits) 做了"同目标只命中一次"
-//! 的去重，理论上同帧不会重复命中已死单位；但物理 sensor 跨帧延迟 + 死亡
-//! 转移在 Pipeline 最末段才挂 [`Dead`](super::Dead)，所以"命中那一帧目标
-//! 还活着、本帧扣完血归零、下一帧再被同一块 hitbox 撞到"的窗口仍然存在。
-//! filter 是这窗口的兜底，让"打死了之后再撞不应该再扣"成立。
+//! `Without<Dead>` filter 直接 miss → 不写血、不发 DamageDealt。Strike /
+//! Projectile 都在自身检测段做了"同目标只命中一次"的去重，但死亡转移
+//! 在 Pipeline 最末段才挂 [`Dead`](super::Dead)，所以"命中那一帧目标还活着、
+//! 本帧扣完血归零、下一帧可能被另一条 strike / projectile 命中"的窗口
+//! 仍然存在。filter 是这窗口的兜底，让"打死了之后再撞不应该再扣"成立。
 
 use bevy::prelude::*;
 
-use super::hitbox::{CollisionMessage, DamageModifier, Hitbox};
+use super::hit_data::{CollisionMessage, DamageModifier};
 use super::{DamageDealtMessage, DamagePipeline, Dead, Health};
 
 /// **纯函数**：给定 base 伤害 + modifier 链 + 取随机数的方式，算出最终
@@ -97,17 +96,16 @@ pub fn apply_modifiers(
 /// 单条 [`CollisionMessage`] 跑完一次完整 pipeline；多条互相独立。
 /// 副作用集中在这里 —— 改 [`Health::current`] + 发 [`DamageDealtMessage`] +
 /// 消耗全局 RNG（通过传给 `apply_modifiers` 的闭包）。
+///
+/// 不再反查任何来源 entity —— `spec` 已经 clone 进
+/// `CollisionMessage`，对来源（strike / projectile / 未来 DoT 虚拟来源）
+/// 一视同仁。
 fn calc_damage_pipeline(
     mut collisions: MessageReader<CollisionMessage>,
-    q_hitbox: Query<&Hitbox>,
     mut q_target: Query<&mut Health, Without<Dead>>,
     mut dealt: MessageWriter<DamageDealtMessage>,
 ) {
     for ev in collisions.read() {
-        // hitbox 可能在同帧已被 despawn —— 优雅 miss。
-        let Ok(hitbox) = q_hitbox.get(ev.hitbox) else {
-            continue;
-        };
         // 死人不再被打（见模块文档"目标已死怎么办"）。
         let Ok(mut hp) = q_target.get_mut(ev.target) else {
             continue;
@@ -118,8 +116,8 @@ fn calc_damage_pipeline(
         // 真要做 deterministic replay / 联机同步时，这里换成从 Resource
         // 里取的 Rng 即可，纯函数本身不动。
         let (amount, is_crit) = apply_modifiers(
-            hitbox.spec.base_damage,
-            &hitbox.spec.modifiers,
+            ev.spec.base_damage,
+            &ev.spec.modifiers,
             &mut || fastrand::f32(),
         );
 
@@ -131,12 +129,13 @@ fn calc_damage_pipeline(
         hp.current = (hp.current - amount).max(0.0);
 
         // 发结算结果 —— hit_triggers / 飘字 / 击杀统计 / 仇恨表都订阅。
+        // triggers clone 进消息，让下游不再依赖来源 entity 存活。
         dealt.write(DamageDealtMessage {
-            caster: hitbox.owner,
+            caster: ev.caster,
             target: ev.target,
-            hitbox: ev.hitbox,
             final_amount: amount,
             is_crit,
+            triggers: ev.spec.triggers.clone(),
         });
     }
 }

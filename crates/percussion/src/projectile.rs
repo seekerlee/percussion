@@ -2,102 +2,102 @@
 //!
 //! # 这个模块解决什么问题
 //!
-//! 远程攻击（火球、箭、闪电矢……）的本质是"一块带伤害判定的形状沿轨迹
-//! 飞行、撞到东西就触发命中"。拆开来看是三件正交的事：
+//! 远程攻击（火球、箭、闪电矢……）的本质是"一发会移动的小球，沿轨迹
+//! 飞、撞到第一个敌人就触发命中"。拆开来看是三件正交的事：
 //!
-//! 1. **作为攻击体**：判定盒、阵营、自伤过滤、命中发
-//!    [`CollisionMessage`](crate::unit::hitbox::CollisionMessage)（由 hitbox 子系统发）
+//! 1. **命中判定**：球心到敌方 unit 中心的 XZ 距离 ≤ `proj.radius +
+//!    hurt_radius` 即命中 → 发
+//!    [`CollisionMessage`](crate::unit::hit_data::CollisionMessage) + despawn
 //! 2. **轨迹**：每帧"该往哪移动多少"（直线、抛物线、追踪……）
-//! 3. **寿命**：何时消失（命中、超时、撞墙）
+//! 3. **寿命 + 撞墙**：超时 / shape_cast 撞 `GameLayer::Terrain` 即 despawn
 //!
-//! 第 1 件事跟近战完全一致 —— 都靠 [`Hitbox`](super::unit::hitbox)
-//! 子模块的"sensor + `CollidingEntities` + 自动结算" 通路。所以
-//! **投射物 entity = `Hitbox` 全套 + [`Projectile`] marker + 轨迹组件**。
-//! 这是组合不是继承：判定通路、轨迹通路、寿命通路各自独立 system，
-//! 不互相调用。
+//! # 跟 [`Strike`](crate::unit::strike::Strike) 的对偶
 //!
-//! # 为什么不另起一套命中检测
+//! 两者本质都是"数值命中判定 entity"，差别在：
 //!
-//! 当前 [`Hitbox`](super::unit::hitbox) 用的是 "sensor + `CollidingEntities`
-//! 每帧扫重叠"，**没有**做 shape-cast 防穿透。理论上 spec §3.4 要求"高速
-//! 投射物不能隧穿"，但首版只有近距离普通速度投射物，先复用 hitbox 通路
-//! 简单上路。等真出现"一帧位移 > 目标厚度"的情况，再加 `cast_shape` 防穿
-//! 透（轨迹推进 system 里加一段 sweep 即可，命中通路本身不动）。
+//! - `Strike`：origin spawn 时快照不变，active 期间持续扫；多/单目标取
+//!   决于 effect
+//! - `Projectile`：origin 跟着 transform 移动，每帧扫一遍候选，**一发一命中**
 //!
-//! # 命中即销毁
+//! 所以不复用 `Strike` —— 共享会污染 strike 的"origin 不变"约定。各走各
+//! 的 system，都直接发同一种 [`CollisionMessage`]，下游
+//! [`damage_calc`](crate::unit::damage_calc) 一视同仁。
 //!
-//! 投射物语义是"一发一命中"：碰到第一个合法目标就消失。但 hitbox 子系统
-//! 默认是"在 lifetime 内可以多次命中不同目标"（去重在同一 owner，不去重
-//! 跨 owner），适合近战横扫。所以 projectile 需要**额外**的"撞了就销毁"
-//! 规则 —— [`despawn_on_hit`] 检查 [`HitboxHits::already_hit`] 非空即 despawn。
+//! # 为什么不走 avian sensor
 //!
-//! # 跟 terrain 的互动
+//! 命中检测完全数值化，跟 [`Strike`](crate::unit::strike::Strike) 同样按 XZ
+//! 距离公式算；unit 上只有 [`HurtRadius`] 数值、没有 sensor。
 //!
-//! [`Hitbox`](super::unit::hitbox) 默认 filter 只看 [`GameLayer::Hurtbox`]，不会
-//! 接触地形。投射物**额外**用 [`SpatialQuery::cast_shape`] 沿这一帧位移路径
-//! 扫一段 terrain，撞到就 despawn。这一段顺便也防了 terrain 的隧穿（不会
-//! 飞穿墙）。具体实现见各轨迹模块（如 [`linear`]）—— 因为"这一帧打算移
-//! 动多少"是轨迹自己的事。
+//! projectile entity 保留一个 [`Collider`]，但**只**用作
+//! [`linear::advance_linear_motion`] 里 `cast_shape` 的 shape 参数（撞墙仍
+//! 走 avian），entity 本身不进 broad-phase（没 `Sensor` / `CollisionLayers`
+//! / `CollidingEntities`），不产 sensor 事件。
 //!
 //! # 当前提供
 //!
-//! - [`Projectile`]：投射物 marker（标记一块 hitbox 是"会动且一发一命中"的）
+//! - [`Projectile`]：数据型投射物组件（owner / faction / spec / lifetime / radius）
 //! - [`spawn_linear_projectile`]：spawn 一发匀速直线投射物的便捷函数
-//! - [`ProjectilePlugin`]：注册 [`despawn_on_hit`] + 轨迹模块的推进 system
+//! - [`ProjectilePlugin`]：注册 [`detect_projectile_hits`] + 轨迹推进
 //! - [`linear`] 子模块：直线轨迹（首版唯一）
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::unit::hitbox::{Faction, HitSpec, HitboxHits, spawn_hitbox};
+use crate::unit::hit_data::{CollisionMessage, Faction, HitSpec};
+use crate::unit::{DamagePipeline, Dead, HurtRadius};
 
 pub mod linear;
 
 /// 投射物物理半径（米）。
 ///
-/// 现阶段所有投射物都是同一号小球 —— 视觉表层走 sprite，这里的 collider
-/// 只负责与 hurtbox / terrain 的几何判定，不必跟视觉严格一致。这个半径采
-/// 取一个能可靠銲中 hurtbox 且不会抱抱着墙角插、又不会在狭缝里卡住的折中
-/// 值。未来如果出现【技能不同型号投射物】这种真实需求，再把 collider 开出
-/// 去作为参数；现在仅一个 caller（debug 发射键）不抽象。
+/// 同时用于：
+///
+/// 1. [`Collider`] 形状 —— 仅供 [`linear::advance_linear_motion`] 里
+///    `cast_shape` 算撞墙；
+/// 2. [`Projectile::radius`] —— 命中判定圆的半径。
+///
+/// 两者数值相同；语义独立。如果未来出现"视觉小、判定大"的需求（手感
+/// 调优常用招），把 [`Projectile::radius`] 跟 collider 半径解开即可。
 const PROJECTILE_RADIUS: f32 = 0.15;
 
-/// 标记一个 entity 是投射物（"会动、一发一命中"的攻击体）。
+/// 投射物组件 —— 自带"命中下游需要的全部信息"。
 ///
-/// 跟 [`Hitbox`](super::unit::hitbox::Hitbox) 是 **and** 关系而不是 **or** ——
-/// 投射物 entity 一定也带 [`Hitbox`](super::unit::hitbox::Hitbox)，本 marker
-/// 只是额外贴一个标签让"命中即销毁"逻辑能 filter 出投射物（避开近战
-/// hitbox：那种要在 lifetime 内可以扫多个目标）。
+/// # 数据 vs marker
 ///
-/// 不带任何数据 —— 所有"投射物本质上的事"（伤害、阵营、寿命、形状）都
-/// 走 [`Hitbox`](super::unit::hitbox::Hitbox) 全套；轨迹细节在
-/// [`linear::LinearMotion`] 等轨迹组件上。Projectile marker 自身只回答
-/// "这块 hitbox 是不是一发一命中"。
-#[derive(Component, Debug, Default)]
-pub struct Projectile;
+/// `Projectile` 本质就是"会动的命中源"，把 owner / faction / spec / lifetime
+/// 都直接烙进本体，不拆子 entity。
+///
+/// # 字段语义
+///
+/// 跟 [`Strike`](crate::unit::strike::Strike) 几乎同形，区别仅在 origin
+/// 表达：strike origin 是字段（不变），projectile origin = `Transform.translation`
+/// （每帧变）。已经在 `Transform` 里就不重复存。
+#[derive(Component, Debug)]
+pub struct Projectile {
+    /// 发射者 entity —— 命中 [`CollisionMessage::caster`]；自伤过滤也读它
+    /// （`target == owner` 跳过）。
+    pub owner: Entity,
+    /// 阵营 —— 跟 [`Strike::faction`](crate::unit::strike::Strike::faction)
+    /// 同义，决定"哪些 unit 算敌方"。
+    pub faction: Faction,
+    /// 命中后果声明（modifiers / triggers）—— caster-side 修正在 spawn 时
+    /// 烧好。命中那一帧 clone 进 [`CollisionMessage::spec`]。
+    pub spec: HitSpec,
+    /// 剩余存活秒数；归零 despawn（无视有没有命中）。
+    pub remaining: f32,
+    /// 命中判定圆半径（米）。跟 collider 半径独立，便于"视觉 vs 手感"分
+    /// 别调参。
+    pub radius: f32,
+}
 
 /// Spawn 一发匀速直线投射物，返回 entity。
 ///
-/// # 参数
+/// 内部装出一个独立的 ECS entity：[`Projectile`] 数据 + [`Collider`]（仅
+/// 撞墙用）+ [`Transform`] + [`linear::LinearMotion`]。**不**带 sensor /
+/// `CollisionLayers` / `CollidingEntities` —— 见模块文档。
 ///
-/// - `owner`：发射者 entity —— 命中结算时自伤过滤会读它（见
-///   [`Hitbox::owner`](super::unit::hitbox::Hitbox))
-/// - `faction`：决定 [`CollisionLayers`] membership（`PlayerHitbox`/`EnemyHitbox`）
-/// - `position`：世界坐标里的出膛位置
-/// - `velocity`：世界坐标里的速度向量（米/秒）。零向量等于"立刻原地等死亡"，
-///   一般避免传零
-/// - `damage`：一次命中的伤害
-/// - `lifetime`：最长存活秒数；到期即使没命中也 despawn
-///
-/// # 实现
-///
-/// 内部走 [`spawn_hitbox`] 拿到全套 hitbox 组件（sensor / 分层 /
-/// `CollidingEntities` / 寿命 / 去重 / `Hitbox` 数据），然后再 insert
-/// [`Projectile`] marker 和 [`linear::LinearMotion`]。这种"拼起来"的写法
-/// 让两个子系统的演化解耦 —— hitbox 子系统改 sensor 行为，本函数不用动；
-/// 加一种新轨迹只写新的 `LinearMotion` 等价物，不改这里。
-///
-/// Collider 固定为半径 [`PROJECTILE_RADIUS`] 的球 —— 见该常量注释。
+/// 参数 `damage` / `lifetime` 暂裸传，未来若有真正的远程技能，应该改
+/// 成接 [`HitSpec`] 让 skill 系统统一管理（跟近战 `skill_strike` 同款）。
 pub fn spawn_linear_projectile(
     commands: &mut Commands,
     owner: Entity,
@@ -107,79 +107,108 @@ pub fn spawn_linear_projectile(
     damage: f32,
     lifetime: f32,
 ) -> Entity {
-    let entity = spawn_hitbox(
-        commands,
-        owner,
-        faction,
-        Collider::sphere(PROJECTILE_RADIUS),
-        Transform::from_translation(position),
-        // 调试发射键只传裸伤害 —— 理论上未来这里也该读 caster.Strength
-        // 等烙进 modifiers，但当前 caller 是 debug 键不关心 caster-side
-        // 修正，保持接口简单。未来有正式技能的远程技时这里会改成
-        // 接受 `HitSpec` 参数，跟 skill_hitbox 一样烙好后带进来。
-        HitSpec {
-            base_damage: damage,
-            modifiers: Vec::new(),
-            triggers: Vec::new(),
-        },
-        lifetime,
-    );
     commands
-        .entity(entity)
-        .insert((Projectile, linear::LinearMotion(velocity)));
-    entity
+        .spawn((
+            Projectile {
+                owner,
+                faction,
+                spec: HitSpec {
+                    base_damage: damage,
+                    modifiers: Vec::new(),
+                    triggers: Vec::new(),
+                },
+                remaining: lifetime,
+                radius: PROJECTILE_RADIUS,
+            },
+            Collider::sphere(PROJECTILE_RADIUS),
+            Transform::from_translation(position),
+            linear::LinearMotion(velocity),
+        ))
+        .id()
 }
 
 /// 投射物子系统的注册点。
 ///
-/// - [`despawn_on_hit`]：跨所有轨迹的通用规则 —— 命中即消失
-/// - [`linear::advance_linear_motion`]：直线轨迹的位置推进 + terrain sweep 销毁
-///
-/// 跟 [`HitboxPlugin`](super::unit::hitbox::HitboxPlugin) 配合使用：本插件
-/// 假定 `HitboxPlugin` 已经 add，否则 `HitboxHits` / `CollidingEntities`
-/// 不会被维护。`lib.rs` 里两者顺序无所谓（都是 Update / PostUpdate 注册
-/// 各自 system，不互相依赖 build 期顺序），但 **HitboxPlugin 必须存在**。
+/// - [`detect_projectile_hits`]：每帧 tick lifetime + 命中扫描，命中或超
+///   时即 despawn。在 [`DamagePipeline::DetectCollision`] set，跟
+///   [`Strike`](crate::unit::strike::Strike) 同位置发 [`CollisionMessage`]。
+/// - [`linear::advance_linear_motion`]：直线轨迹推进 + 撞墙销毁。
 pub struct ProjectilePlugin;
 
 impl Plugin for ProjectilePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
+            Update,
+            detect_projectile_hits.in_set(DamagePipeline::DetectCollision),
+        )
+        .add_systems(
             PostUpdate,
             // 轨迹推进放 PostUpdate.before(Prepare)：跟 movement.rs 的
-            // `apply_movement` 同一个时机——在 avian 把 Transform 同步到
-            // Position 之前写 Transform，broad-phase 看到最新位置生成
-            // CollidingEntities，下一帧 detect_hitbox_collisions 拿到的
-            // 重叠就是这一帧的"投射物到了新位置"的结果。
+            // `apply_movement` 同一个时机 —— 在 avian 把 Transform 同步
+            // 到 Position 之前写 Transform，下一帧 `detect_projectile_hits`
+            // 看到的就是"刚走完这一帧位移"的新位置。
             linear::advance_linear_motion.before(PhysicsSystems::Prepare),
-        )
-        // 命中即销毁放 Update：detect_hitbox_collisions 也在 Update 里
-        // 写 HitboxHits，本 system 读它。最多延迟一帧 despawn（hitbox 子
-        // 系统在 PostUpdate 物理同步后看到接触 → 第 N+1 帧 Update 写
-        // HitboxHits → 第 N+1 帧 Update 末尾本 system 看到 → despawn）——
-        // 玩法上感受不到。
-        .add_systems(Update, despawn_on_hit);
+        );
     }
 }
 
-/// "命中即销毁"规则：扫所有 [`Projectile`]，发现已经命中过至少一个目标
-/// 就 despawn 自身。
+/// 每帧推进 projectile 寿命 + 跑命中判定 + 发 [`CollisionMessage`]。
 ///
-/// 为什么读 `HitboxHits.already_hit` 而不是订阅
-/// [`CollisionMessage`](crate::unit::hitbox::CollisionMessage) /
-/// [`DamageDealtMessage`](crate::unit::DamageDealtMessage)：
+/// 一发一命中：第一次命中合法敌方即发 message + despawn，本帧不再扫剩
+/// 余候选。同帧多发 projectile 互不影响（per-entity 循环独立）。
 ///
-/// - 那些是给下游结算 / trigger 系统消费的，订阅他们还要反查"哪发
-///   投射物干的"。
-/// - `HitboxHits` 是 hitbox 子系统给每块 hitbox 记的"我命中过谁"，
-///   **直接**就是本系统要的信号。
-///
-/// 跟近战 hitbox 区分：近战 hitbox 也会写 `HitboxHits`，但**没有**
-/// [`Projectile`] marker，本 query 不命中它们 —— 近战靠 lifetime 自然到期
-/// 销毁，可以扫多个目标。
-fn despawn_on_hit(q: Query<(Entity, &HitboxHits), With<Projectile>>, mut commands: Commands) {
-    for (entity, hits) in &q {
-        if !hits.already_hit.is_empty() {
-            commands.entity(entity).despawn();
+/// 算法跟 [`crate::unit::strike`] 同款风格："query 一次 collect 候选 →
+/// 纯循环判定"，避免 helper 接 `Query` 引起的 invariant lifetime 包袱。
+#[allow(clippy::type_complexity)]
+fn detect_projectile_hits(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut collisions: MessageWriter<CollisionMessage>,
+    mut q_projectile: Query<(Entity, &Transform, &mut Projectile)>,
+    q_target: Query<
+        (Entity, &Transform, &HurtRadius, &Faction),
+        (Without<Projectile>, Without<Dead>),
+    >,
+) {
+    let dt = time.delta_secs();
+
+    // 候选快照 —— 多发 projectile 同帧共享。
+    let candidates: Vec<(Entity, Vec3, f32, Faction)> = q_target
+        .iter()
+        .map(|(e, tf, hr, f)| (e, tf.translation, hr.0, *f))
+        .collect();
+
+    for (proj_e, proj_tf, mut proj) in &mut q_projectile {
+        // 寿命推进。超时不命中也消失。
+        proj.remaining -= dt;
+        if proj.remaining <= 0.0 {
+            commands.entity(proj_e).despawn();
+            continue;
+        }
+
+        // 找第一个合法敌方命中 —— 不挑最近，遍历到先撞到的就 break。
+        for (target_e, target_pos, target_radius, target_faction) in &candidates {
+            if *target_faction == proj.faction {
+                continue;
+            }
+            // 自伤过滤：target == owner（理论上 caster 自己也是敌方阵营之
+            // 外，靠 faction 已经拦掉了，这里是双保险）。
+            if *target_e == proj.owner {
+                continue;
+            }
+            let dx = proj_tf.translation.x - target_pos.x;
+            let dz = proj_tf.translation.z - target_pos.z;
+            let d2 = dx * dx + dz * dz;
+            let threshold = proj.radius + target_radius;
+            if d2 <= threshold * threshold {
+                collisions.write(CollisionMessage {
+                    caster: proj.owner,
+                    target: *target_e,
+                    spec: proj.spec.clone(),
+                });
+                commands.entity(proj_e).despawn();
+                break;
+            }
         }
     }
 }

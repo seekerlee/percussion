@@ -2,8 +2,8 @@
 //!
 //! # 跟 modifier 的区别
 //!
-//! [`DamageModifier`](super::hitbox::DamageModifier) 影响**伤害数字**（顺序敏感、
-//! 串行）；[`HitTrigger`](super::hitbox::HitTrigger) 影响**伤害之外的世界状态**
+//! [`DamageModifier`](super::hit_data::DamageModifier) 影响**伤害数字**（顺序敏感、
+//! 串行）；[`HitTrigger`](super::hit_data::HitTrigger) 影响**伤害之外的世界状态**
 //! —— 吸血回 caster 血、击退推 target、点燃挂 buff、眩晕挂 debuff……
 //!
 //! Trigger 之间相互独立（理论上可并发），所以 Vec 里的顺序**不影响结果**。
@@ -13,12 +13,12 @@
 //! # 在 pipeline 里的位置
 //!
 //! 上游 [`damage_calc`](super::damage_calc) 已经写血并发了
-//! [`DamageDealtMessage`](super::DamageDealtMessage)。本模块只读这条消息 +
-//! hitbox 上的 [`triggers`](super::hitbox::HitSpec::triggers)，把副作用挂上去。
+//! [`DamageDealtMessage`](super::DamageDealtMessage)。本模块只读这条消息
+//! 里的 `triggers` 列表，把副作用挂上去。
 //!
 //! # 为什么不把吸血直接写在 damage_calc 里
 //!
-//! 因为副作用要看 `is_crit`（[`CritOnly`](super::hitbox::HitTrigger::CritOnly)
+//! 因为副作用要看 `is_crit`（[`CritOnly`](super::hit_data::HitTrigger::CritOnly)
 //! 包装），而 `is_crit` 只有在 modifier 全跑完才知道。所以"跑 modifier → 出
 //! is_crit → 派发 trigger"必须分两步。拆成消息之后顺带把"飘字、击杀统计"这种
 //! 也能挂在 [`DamageDealtMessage`] 上，不必都堆进一个系统。
@@ -26,24 +26,20 @@
 use bevy::prelude::*;
 
 use super::burning::Burning;
-use super::hitbox::{HitTrigger, Hitbox};
+use super::hit_data::HitTrigger;
 use super::{DamageDealtMessage, DamagePipeline, Health};
 
 /// 派发每条 [`DamageDealtMessage`] 上挂的所有 trigger。
+///
+/// triggers 已经被 [`damage_calc`](super::damage_calc) clone 进消息，本系
+/// 统不再反查任何来源 entity。
 fn dispatch_hit_triggers(
     mut events: MessageReader<DamageDealtMessage>,
-    q_hitbox: Query<&Hitbox>,
     mut q_caster_health: Query<&mut Health>,
     mut commands: Commands,
 ) {
     for ev in events.read() {
-        // Hitbox 仍可能在同帧被 despawn（短 lifetime）—— 优雅 miss，跳过
-        // 所有 trigger。代价是这次命中不吸血不点燃，可以接受。
-        let Ok(hitbox) = q_hitbox.get(ev.hitbox) else {
-            continue;
-        };
-
-        for trigger in &hitbox.spec.triggers {
+        for trigger in &ev.triggers {
             execute_trigger(trigger, ev, &mut q_caster_health, &mut commands);
         }
     }

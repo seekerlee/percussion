@@ -182,12 +182,8 @@ fn apply_movement(
         let mut hit_ground = false;
         // 排除自身：shape-cast 从自己的 collider 位置出发，不排除会立即"命中"自己。
         //
-        // mask 限定只看 Body / Terrain 两层：hurtbox / hitbox 都是 Sensor，
-        // 逻辑上不该拦住 body 走路。虽然 [`MoveAndSlide`] 内部 collider query
-        // 上挂了 `Without<Sensor>`（深入物体的 depenetration 的那一路会自动跳
-        // sensor），但外部 shape-cast 依然会被 filter mask 控制 —— 不明示限
-        // 层的话，扫过去还是会命中 hurtbox sensor 、返回 hit 事件。带上这句
-        // 让 sweep 从源头上就忽略它们。
+        // mask 限定只看 Body / Terrain 两层 —— 是现在的全部 collider 层，
+        // 但明示加上避免未来加新层（如 trigger volume）时忘了调这里。
         let filter = SpatialQueryFilter::from_excluded_entities([entity])
             .with_mask([GameLayer::Body, GameLayer::Terrain]);
         let out = mover.move_and_slide(

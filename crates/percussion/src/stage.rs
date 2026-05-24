@@ -191,8 +191,7 @@ pub fn spawn_stage(
             // 的"底面" —— 不在下面 `barriers` 数组里另外算。
             //
             // CollisionLayers：membership = Terrain，filter = [Body]。
-            // 只跟 unit body 互相看，对 hurtbox / hitbox sensor 透明 ——
-            // 避免攻击 sensor 把地板当受害者误触发。
+            // 只跟 unit body 互相看，其他层都不参与。
             stage.spawn((
                 Mesh3d(ground_mesh),
                 MeshMaterial3d(ground_material),
@@ -212,7 +211,7 @@ pub fn spawn_stage(
             }
 
             // 5 面物理屏障 (4 立面 + 顶)：纯 collider，没有 mesh。
-            // 同地面一样挂 Terrain layer —— 拒绝 hurtbox / hitbox sensor 误触发。
+            // 同地面一样挂 Terrain layer。
             for (center, full_size) in barriers {
                 stage.spawn((
                     Transform::from_translation(center),
