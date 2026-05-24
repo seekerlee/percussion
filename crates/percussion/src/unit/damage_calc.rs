@@ -115,11 +115,10 @@ fn calc_damage_pipeline(
         // bevy_rand 那套确定性 RNG 资源对单机非联机暂时是过度设计。等
         // 真要做 deterministic replay / 联机同步时，这里换成从 Resource
         // 里取的 Rng 即可，纯函数本身不动。
-        let (amount, is_crit) = apply_modifiers(
-            ev.spec.base_damage,
-            &ev.spec.modifiers,
-            &mut || fastrand::f32(),
-        );
+        let (amount, is_crit) =
+            apply_modifiers(ev.spec.base_damage, &ev.spec.modifiers, &mut || {
+                fastrand::f32()
+            });
 
         // (target-side 修正未来在这里接：armor reduction / vulnerability / 抗性…)
 
@@ -177,8 +176,11 @@ mod tests {
     #[test]
     fn strength_then_crit() {
         let mods = [
-            DamageModifier::Mul(2.0),                       // 力量 / strength
-            DamageModifier::Crit { chance: 1.0, mul: 1.5 }, // 必暴
+            DamageModifier::Mul(2.0), // 力量 / strength
+            DamageModifier::Crit {
+                chance: 1.0,
+                mul: 1.5,
+            }, // 必暴
         ];
         let (amount, is_crit) = apply_modifiers(10.0, &mods, &mut || 0.0);
         assert_eq!(amount, 30.0); // 10 * 2 * 1.5

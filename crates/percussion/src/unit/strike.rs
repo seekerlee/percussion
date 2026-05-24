@@ -439,10 +439,7 @@ pub struct StrikePlugin;
 
 impl Plugin for StrikePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            resolve_strikes.in_set(DamagePipeline::DetectHits),
-        );
+        app.add_systems(Update, resolve_strikes.in_set(DamagePipeline::DetectHits));
     }
 }
 
