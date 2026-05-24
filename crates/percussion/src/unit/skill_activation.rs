@@ -28,7 +28,7 @@
 //!
 //! # caster-side 修正已结清
 //!
-//! [`HitSpec`](super::hit_data::HitSpec) 里的 modifiers / triggers 已经被
+//! [`HitSpec`](super::hit_data::HitSpec) 里的 modifiers / effects 已经被
 //! [`recompute_skill_book`](super::skill::recompute_skill_book) 烧进
 //! [`SkillBook`](super::skill::SkillBook)，本桥接只 clone 一份 `on_hit` 给
 //! [`Strike::on_hit`]，**不读任何 caster 数值组件**。

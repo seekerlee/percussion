@@ -1,12 +1,12 @@
 //! Burning —— 持续掉血 debuff。
 //!
-//! 由 [`HitTrigger::Burn`](super::hit_data::HitTrigger::Burn) 在命中时挂到目标
+//! 由 [`HitEffect::Burn`](super::hit_data::HitEffect::Burn) 在命中时挂到目标
 //! 身上。本模块负责每帧扣血 + 到期自动清除。
 //!
 //! # 为什么不走 damage_calc pipeline
 //!
 //! Burning 已经是"过去某次命中的衍生物"—— 那次命中的暴击 / 武器倍率 /
-//! caster.Strength 在 spawn 时就已经烙进了 Burn 的 dps（trigger 的设计者
+//! caster.Strength 在 spawn 时就已经烙进了 Burn 的 dps（effect 的设计者
 //! 自己决定 dps 是 final_amount × x 还是固定值）。所以正在 tick 的 DoT
 //! 不应该**再**吃一次 caster-side modifier。
 //!
@@ -17,10 +17,10 @@
 //! # 在 pipeline 里的位置
 //!
 //! [`DamagePipeline::PersistentEffects`](super::DamagePipeline::PersistentEffects)
-//! 阶段（位于 [`Triggers`](super::DamagePipeline::Triggers) 之后、
+//! 阶段（位于 [`Effects`](super::DamagePipeline::Effects) 之后、
 //! [`Transition`](super::DamagePipeline::Transition) 之前）。
 //! 顺序意义：本帧刚被点燃的目标这一帧不扣 DoT —— Burning 组件是这帧
-//! Triggers 阶段才插上的，PersistentEffects 阶段 query 看不到（Bevy 默认
+//! Effects 阶段才插上的，PersistentEffects 阶段 query 看不到（Bevy 默认
 //! 不立即生效 deferred commands 直到 sync point）。这是想要的行为：
 //! 点燃当帧只吃命中伤害，下一帧才开始烧。
 
@@ -30,7 +30,7 @@ use super::{DamagePipeline, Dead, Health};
 
 /// 持续掉血的 debuff 组件。
 ///
-/// 由 [`HitTrigger::Burn`](super::hit_data::HitTrigger::Burn) 挂上；
+/// 由 [`HitEffect::Burn`](super::hit_data::HitEffect::Burn) 挂上；
 /// [`tick_burning`] 每帧扣血 + 倒计时 + 到期清除。
 #[derive(Component, Debug, Clone)]
 pub struct Burning {

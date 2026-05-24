@@ -322,7 +322,7 @@ fn player_movement(
 /// 按 `Space` 给玩家一次 10 点伤害 —— 这是**调试合成伤害**，直接写
 /// [`Health::current`]，**不走**正规的 [`DamagePipeline`](super::DamagePipeline)
 /// 流水线：没有真实的 caster / 命中来源，伪造一条 `DamageDealtMessage` 反而
-/// 让下游的 trigger / 统计系统看到一个虚假 caster Entity，多一层坑。
+/// 让下游的 effect / 统计系统看到一个虚假 caster Entity，多一层坑。
 /// 调试键就应该是"跳过中间环节、直接验证结果"。
 ///
 /// `Without<Dead>` filter —— 死人不再被打（跟 pipeline 一致）。打死后按

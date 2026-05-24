@@ -28,7 +28,7 @@
 //!   提供 [`MoveVelocity`](movement::MoveVelocity) 让"想往哪走"的来源（玩家
 //!   输入、AI、击飞……）有地方写。
 //! - [`DamageDealtMessage`] / [`UnitDiedMessage`]：伤害结算 / 死亡的消息总线
-//! - model-side system：[`damage_calc`] / [`hit_triggers`] / [`transition_to_dead`]
+//! - model-side system：[`damage_calc`] / [`hit_effects`] / [`transition_to_dead`]
 //! - lifecycle observer：[`disable_body_on_dead`] + [`reenable_body_on_revive`]
 //!
 //! # 全局约定：`Without<Dead>` filter
@@ -211,30 +211,30 @@ pub struct Strength(pub f32);
 /// 一次完整命中**结算后**发出的消息 —— [`damage_calc`] 跑完 modifier 流水线、
 /// 把最终伤害写入目标 [`Health`] 之后发。
 ///
-/// 用它做下游 hook：trigger 派发（[`hit_triggers`]，吸血 / 暴击衍生效果）、
+/// 用它做下游 hook：effect 派发（[`hit_effects`]，吸血 / 暴击衍生效果）、
 /// 飘字 UI、击杀统计、AI 仇恨表。
 ///
 /// 替代了旧版的 `DamageMessage` —— 旧消息是"我请求扣血"，本消息是"血
 /// 已经扣完了"。语义反转：从"伤害源声明"→"权威结算结果"，后段 system
 /// 拿到就直接用，不用再担心 race / 重复结算。
 ///
-/// **自包含 `triggers`**（clone in），让 [`hit_triggers`] 无需反查来源
+/// **自包含 `effects`**（clone in），让 [`hit_effects`] 无需反查来源
 /// entity。原因详见 [`CollisionMessage`](hit_data::CollisionMessage) 同款理由。
 #[derive(Message, Debug, Clone)]
 pub struct DamageDealtMessage {
-    /// 攻击发起者。trigger 系统需要它来回写 caster（吸血加血）。
+    /// 攻击发起者。effect 系统需要它来回写 caster（吸血加血）。
     pub caster: Entity,
     /// 受伤的 entity。
     pub target: Entity,
     /// 最终扣掉的血量（被 `(current - amount).max(0.0)` clamp 之前的值；
-    /// 吸血等比例 trigger 应该按这个算）。
+    /// 吸血等比例 effect 应该按这个算）。
     pub final_amount: f32,
-    /// 这次结算 modifier 流水线是否触发了暴击。`CritOnly` trigger 用它
+    /// 这次结算 modifier 流水线是否触发了暴击。`CritOnly` effect 用它
     /// 判定是否启动条件分支。
     pub is_crit: bool,
-    /// 命中后挂的 trigger 列表 —— 从来源 spec clone 进来。`hit_triggers`
+    /// 命中后挂的 effect 列表 —— 从来源 spec clone 进来。`hit_effects`
     /// 直接遍历，不再查 [`Strike`](strike::Strike)。
-    pub triggers: Vec<hit_data::HitTrigger>,
+    pub effects: Vec<hit_data::HitEffect>,
 }
 
 /// Unit 死亡通知 —— [`transition_to_dead`] 给某个 unit 挂上 [`Dead`] marker
@@ -253,7 +253,7 @@ pub struct UnitDiedMessage {
 /// 成一条流水线，单点定义顺序，比每个 system 各自 `.before()/.after()`
 /// 链清晰得多。
 ///
-/// 设计哲学："命中检测→伤害结算→trigger 派发→死亡转移" 是一条逻辑
+/// 设计哲学："命中检测→伤害结算→effect 派发→死亡转移" 是一条逻辑
 /// 上不可乱序的流水线。每段产物喂下一段消费，并发性能不是这里的瓶颈
 /// （单帧整条 < 1ms），所以**顺序优先于并发**。
 ///
@@ -268,11 +268,11 @@ pub enum DamagePipeline {
     /// [`damage_calc`] 跑 modifier 流水线，把最终伤害扣到
     /// [`Health`]，发 [`DamageDealtMessage`]。
     ApplyDamage,
-    /// [`hit_triggers`] 按 [`DamageDealtMessage`] 派发 per-hit triggers
+    /// [`hit_effects`] 按 [`DamageDealtMessage`] 派发 per-hit effects
     /// （吸血 / 衍生效果），可能进一步修改 caster / target 状态。
-    Triggers,
+    Effects,
     /// [`burning`] 等"持续 debuff tick"模块跑自己的周期性扣血 ——
-    /// 跟 per-hit trigger 区分开（trigger 是"一次命中触发的副作用"，
+    /// 跟 per-hit effect 区分开（effect 是"一次命中触发的副作用"，
     /// 持续 debuff 是"已存在的状态每帧 tick"）。
     PersistentEffects,
     /// 本模块的 [`transition_to_dead`] —— 扫 Health 归零的，挂 Dead。
@@ -299,7 +299,7 @@ impl Plugin for UnitPlugin {
                 (
                     DamagePipeline::DetectCollision,
                     DamagePipeline::ApplyDamage,
-                    DamagePipeline::Triggers,
+                    DamagePipeline::Effects,
                     DamagePipeline::PersistentEffects,
                     DamagePipeline::Transition,
                 )
@@ -391,7 +391,7 @@ pub mod damage_calc;
 pub mod dragon1;
 pub mod facing;
 pub mod hit_data;
-pub mod hit_triggers;
+pub mod hit_effects;
 pub mod movement;
 pub mod player;
 pub mod skill;

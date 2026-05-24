@@ -16,23 +16,23 @@
 //!    一步），同时记录 `is_crit`；
 //! 3. 把最终伤害扣到目标 [`Health::current`](super::Health) 上（clamp 到 0）；
 //! 4. 发一条 [`DamageDealtMessage`](super::DamageDealtMessage) —— 后续的
-//!    [`hit_triggers`](super::hit_triggers) 派发吸血 / 暴击衍生效果用。
+//!    [`hit_effects`](super::hit_effects) 派发吸血 / 暴击衍生效果用。
 //!
-//! 下游：[`hit_triggers`](super::hit_triggers) 在 [`Triggers`](super::DamagePipeline::Triggers)
+//! 下游：[`hit_effects`](super::hit_effects) 在 [`Effects`](super::DamagePipeline::Effects)
 //! 阶段；[`burning`](super::burning) 等持续 debuff 在
 //! [`PersistentEffects`](super::DamagePipeline::PersistentEffects) 阶段独立扣血；
 //! 最后 [`transition_to_dead`](super::transition_to_dead) 在
 //! [`Transition`](super::DamagePipeline::Transition) 阶段统一判死。
 //!
-//! # 为什么 modifier 集中跑 / trigger 也集中跑（不拆 N 个 system）
+//! # 为什么 modifier 集中跑 / effect 也集中跑（不拆 N 个 system）
 //!
 //! Modifier 之间有顺序依赖（Crit 翻倍要乘到 Mul 出来的中间值上），必须**串行**；
 //! 拆成 N 个并发 system 反而要靠 message 接力把中间状态串起来，得不偿失。
 //! 直接一个 `for` + `match` 的胖函数最简单 —— 加一个新 modifier 就加一个
 //! `match` arm。
 //!
-//! 同理 [`hit_triggers`](super::hit_triggers) 也是一个胖 `match`。区别只是
-//! trigger 互不依赖，理论上可以并发，但 N 个 system 各自查消息中的 triggers
+//! 同理 [`hit_effects`](super::hit_effects) 也是一个胖 `match`。区别只是
+//! effect 互不依赖，理论上可以并发，但 N 个 system 各自查消息中的 effects
 //! 找自己关心的 variant 反而是 N 倍 query 开销 —— 还不如一次 match 派发完。
 //!
 //! # 目标已死怎么办
@@ -128,14 +128,14 @@ fn calc_damage_pipeline(
         // 单独计算并塞进 DamageDealtMessage，不要从 Health.current 反推。
         hp.current = (hp.current - amount).max(0.0);
 
-        // 发结算结果 —— hit_triggers / 飘字 / 击杀统计 / 仇恨表都订阅。
-        // triggers clone 进消息，让下游不再依赖来源 entity 存活。
+        // 发结算结果 —— hit_effects / 飘字 / 击杀统计 / 仇恨表都订阅。
+        // effects clone 进消息，让下游不再依赖来源 entity 存活。
         dealt.write(DamageDealtMessage {
             caster: ev.caster,
             target: ev.target,
             final_amount: amount,
             is_crit,
-            triggers: ev.spec.triggers.clone(),
+            effects: ev.spec.effects.clone(),
         });
     }
 }

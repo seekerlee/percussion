@@ -7,25 +7,25 @@
 //! - **产**：[`Strike`](super::strike::Strike) / [`Projectile`](crate::projectile::Projectile)
 //!   各自做数值距离判定，命中即发 [`CollisionMessage`]。
 //! - **算**：[`damage_calc`](super::damage_calc) 跑 [`HitSpec::modifiers`]
-//!   流水线 + [`hit_triggers`](super::hit_triggers) 派 [`HitSpec::triggers`]
+//!   流水线 + [`hit_effects`](super::hit_effects) 派 [`HitSpec::effects`]
 //!   副作用。
 //!
 //! 两段中间靠 [`CollisionMessage`] 解耦：消息自包含 spec，**不依赖产源
 //! entity 仍存活**。短 lifetime 的 strike entity 可以在判定后立刻消失，
 //! 下游 system 依旧能完整结算。
 //!
-//! # 两阶段后果拆分：modifier vs trigger
+//! # 两阶段后果拆分：modifier vs effect
 //!
 //! [`HitSpec`] 把命中后果拆成两条 Vec：
 //!
 //! - [`modifiers`](HitSpec::modifiers) —— **影响伤害数字**，顺序敏感串行
 //!   执行（`Mul(2.0)` 在 `Crit{chance:0.5, mul:2.0}` 之前 vs 之后，最终
 //!   值不同）。
-//! - [`triggers`](HitSpec::triggers) —— **不影响伤害数字、只挂副作用**，
+//! - [`effects`](HitSpec::effects) —— **不影响伤害数字、只挂副作用**，
 //!   相互独立（吸血、击退、点燃；顺序原则上无所谓）。
 //!
 //! 拆开是因为流水线必须先跑完 modifier 才知道最终伤害 + 是否暴击，副作
-//! 用里像 [`HitTrigger::CritOnly`] / [`HitTrigger::Lifesteal`] 要读这两个
+//! 用里像 [`HitEffect::CritOnly`] / [`HitEffect::Lifesteal`] 要读这两个
 //! 结果。
 //!
 //! # caster-side 一切烧在 spawn 那一刻
@@ -73,9 +73,9 @@ pub struct HitSpec {
     /// 修正流水线 —— 顺序敏感，[`damage_calc`](super::damage_calc) 顺序
     /// 串行执行。
     pub modifiers: Vec<DamageModifier>,
-    /// 命中后挂副作用 —— [`hit_triggers`](super::hit_triggers) 顺序遍历
+    /// 命中后挂副作用 —— [`hit_effects`](super::hit_effects) 顺序遍历
     /// 但互不依赖（顺序不影响结果）。
-    pub triggers: Vec<HitTrigger>,
+    pub effects: Vec<HitEffect>,
 }
 
 /// 影响最终伤害**数值**的修正。
@@ -94,9 +94,9 @@ pub enum DamageModifier {
 }
 
 /// 命中之后挂的副作用。在 damage 已写入目标 Health 之后由
-/// [`hit_triggers`](super::hit_triggers) 派发。
+/// [`hit_effects`](super::hit_effects) 派发。
 #[derive(Debug, Clone)]
-pub enum HitTrigger {
+pub enum HitEffect {
     /// 把 `final_amount * ratio` 的血量回给 caster（即
     /// [`CollisionMessage::caster`]）。
     Lifesteal { ratio: f32 },
@@ -110,10 +110,10 @@ pub enum HitTrigger {
     ///
     /// 首版未实现 —— 占位符，等 Stunned + AI / 输入禁用接入。
     Stun { duration: f32 },
-    /// 包装语义：**仅当本次结算 is_crit = true** 才执行内层 trigger。
+    /// 包装语义：**仅当本次结算 is_crit = true** 才执行内层 effect。
     ///
     /// 用 `Box` 是因为 enum variant 不能直接持有自身（无限大小）。
-    CritOnly(Box<HitTrigger>),
+    CritOnly(Box<HitEffect>),
 }
 
 /// "命中已发生"的最原始事实 —— [`Strike`](super::strike::Strike) /
@@ -129,12 +129,12 @@ pub enum HitTrigger {
 ///    响下游结算。
 #[derive(Message, Debug, Clone)]
 pub struct CollisionMessage {
-    /// 攻击发起者 —— trigger 系统需要它来回写 caster（吸血加血等）。
+    /// 攻击发起者 —— effect 系统需要它来回写 caster（吸血加血等）。
     pub caster: Entity,
     /// 被命中的 unit entity。
     pub target: Entity,
     /// 这次命中要走的 spec —— `clone` 进消息，独立于来源 entity 的生命
-    /// 周期。拷贝成本：几十字节 Vec（modifiers / triggers），每帧命中数
+    /// 周期。拷贝成本：几十字节 Vec（modifiers / effects），每帧命中数
     /// 十次，可接受。
     pub spec: HitSpec,
 }

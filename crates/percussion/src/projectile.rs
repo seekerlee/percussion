@@ -80,7 +80,7 @@ pub struct Projectile {
     /// 阵营 —— 跟 [`Strike::faction`](crate::unit::strike::Strike::faction)
     /// 同义，决定"哪些 unit 算敌方"。
     pub faction: Faction,
-    /// 命中后果声明（modifiers / triggers）—— caster-side 修正在 spawn 时
+    /// 命中后果声明（modifiers / effects）—— caster-side 修正在 spawn 时
     /// 烧好。命中那一帧 clone 进 [`CollisionMessage::spec`]。
     pub spec: HitSpec,
     /// 剩余存活秒数；归零 despawn（无视有没有命中）。
@@ -115,7 +115,7 @@ pub fn spawn_linear_projectile(
                 spec: HitSpec {
                     base_damage: damage,
                     modifiers: Vec::new(),
-                    triggers: Vec::new(),
+                    effects: Vec::new(),
                 },
                 remaining: lifetime,
                 radius: PROJECTILE_RADIUS,

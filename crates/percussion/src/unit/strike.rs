@@ -9,7 +9,7 @@
 //!
 //! - 谁在打（[`Strike::caster`] + [`Strike::faction`]）
 //! - 怎么算命中（[`Strike::effect`] —— 几何参数）
-//! - 打中之后做什么（[`Strike::on_hit`] —— [`HitSpec`] modifier 流水线 + triggers）
+//! - 打中之后做什么（[`Strike::on_hit`] —— [`HitSpec`] modifier 流水线 + effects）
 //! - 还能打多久（[`Strike::remaining`]）
 //! - 已经打过谁（[`Strike::already_hit`]，per-cast 去重）
 //!
@@ -60,7 +60,7 @@
 //! 判定到新命中时，本模块发
 //! [`CollisionMessage`](super::hit_data::CollisionMessage)。`spec` 字段由
 //! [`Strike::on_hit`] clone 进消息（caster-side 修正在 spawn 时已烙好），
-//! 下游 [`damage_calc`](super::damage_calc) / [`hit_triggers`](super::hit_triggers)
+//! 下游 [`damage_calc`](super::damage_calc) / [`hit_effects`](super::hit_effects)
 //! 无需区分来源 —— [`Projectile`](crate::projectile::Projectile) 也发同一种
 //! 消息。
 
@@ -75,7 +75,7 @@ use super::{Dead, HurtRadius, IsGround};
 /// 详细生命周期 / 对偶关系见模块顶部文档。
 #[derive(Component, Debug)]
 pub struct Strike {
-    /// 攻击发起者 entity。**仅用于命中下游**（trigger 系统的吸血回血、击杀
+    /// 攻击发起者 entity。**仅用于命中下游**（effect 系统的吸血回血、击杀
     /// 归属统计），不用于每帧重新读 caster 的位置 / 状态 —— Strike 一旦
     /// spawn，所有 caster-side 数值（[`HitSpec`] modifier 链）都已经烧好，
     /// caster 死了 / 走了 / 状态变了都不影响已飞出的攻击。
@@ -96,7 +96,7 @@ pub struct Strike {
     pub origin: Vec3,
     /// 几何参数。
     pub effect: AttackEffect,
-    /// 命中规格 —— modifier 流水线 + triggers。caster-side 修正在
+    /// 命中规格 —— modifier 流水线 + effects。caster-side 修正在
     /// [`recompute_skill_book`](super::skill::recompute_skill_book) 阶段就已经烧
     /// 进 `modifiers`，桥接层只是 clone 进来，本模块不读 / 不改。
     pub on_hit: HitSpec,

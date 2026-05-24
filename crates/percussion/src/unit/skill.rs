@@ -73,7 +73,7 @@ pub enum SkillKind {
 /// 共用同一形状。
 ///
 /// **不再是 `Copy`**：内含 [`HitSpec`] 持有 `Vec<DamageModifier>` /
-/// `Vec<HitTrigger>`，自然不能 Copy。所有需要传递的地方走 `Clone`，
+/// `Vec<HitEffect>`，自然不能 Copy。所有需要传递的地方走 `Clone`，
 /// 一个 caster 通常 ≤ 10 招，clone 成本可忽略。
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -137,7 +137,7 @@ pub enum SkillEffectKind {
         ///
         /// 见 [`HitSpec`] —— 桥接 system 用它构造 [`Strike`] 的
         /// `on_hit`，命中那一刻 clone 进 `CollisionMessage`，下游
-        /// modifier / trigger 流水线消费。
+        /// modifier / effect 流水线消费。
         on_hit: HitSpec,
     },
 }
@@ -149,7 +149,7 @@ pub enum SkillEffectKind {
 /// [`Skill`] 塞进 [`SkillBook`]。
 ///
 /// **由 fn 返回 owned 值而不是 `&'static const`**：[`HitSpec`] 持有 `Vec`
-/// （为 modifier / trigger 流水线），Vec 不能在 const context 里构造。
+/// （为 modifier / effect 流水线），Vec 不能在 const context 里构造。
 /// 改成 fn 之后每次调用构造一份新值；调用频率 = 重算频率（intent / source
 /// 变化时，远低于每帧），无热路径开销。
 fn template(kind: SkillKind) -> Skill {
@@ -164,14 +164,14 @@ fn template(kind: SkillKind) -> Skill {
                 reach: 1.4,
                 // x = reach/2 + 0.0：判定近边正好贴 caster 体表。
                 offset: Vec2::new(0.7, 0.0),
-                // 首版只挂裸伤害：modifiers / triggers 都空。
+                // 首版只挂裸伤害：modifiers / effects 都空。
                 // bridge 在 spawn strike 时会按 caster.Strength 等 prepend
                 // [`DamageModifier::Mul`] 到 modifiers 头部 —— 模板本身
                 // 不需要预声明 caster-side 修正。
                 on_hit: HitSpec {
                     base_damage: 12.0,
                     modifiers: Vec::new(),
-                    triggers: Vec::new(),
+                    effects: Vec::new(),
                 },
             },
         },
