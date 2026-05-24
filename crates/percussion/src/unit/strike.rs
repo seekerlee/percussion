@@ -7,7 +7,8 @@
 //! （= [`Skill::active`](super::skill::Skill::active)）内**持续做命中判定**。把"一
 //! 次出招"的活态状态对象化成一个 entity = `Strike`，承载：
 //!
-//! - 谁在打（[`Strike::caster`] + [`Strike::faction`]）
+//! - 谁在打（[`Strike::caster`]）；打哪些人由阵营过滤决定，
+//!   过滤参数在 [`AttackEffect`] 各变体内部（详见下述）
 //! - 怎么算命中（[`Strike::effect`] —— 几何参数）
 //! - 打中之后做什么（[`Strike::on_hit`] —— [`HitSpec`] modifier 流水线 + effects）
 //! - 还能打多久（[`Strike::remaining`]）
@@ -48,7 +49,8 @@
 //! - [`AttackEffect::MeleeReach`] —— 单目标普攻，候选 = 全敌方 unit，每帧从中
 //!   选**最近的一个**判 dist。整个 active 期间最多命中 1 次。
 //! - [`AttackEffect::SingleTarget`] —— 单目标锁定（cast 时已确定 target），逐帧
-//!   检查那个特定 target 的 dist。同样最多命中 1 次。
+//!   检查那个特定 target 的 dist。同样最多命中 1 次。**不查 faction**
+//!   —— 上游已选定 target，治疗 / 友伤 / 自伤等合法用例由此路径支持。
 //! - [`AttackEffect::Aoe`] —— **多目标**圆 / 扇形，候选 = 全敌方 unit，每帧扫
 //!   全部，per-target 去重一次性命中（同一 target 在 active 期间只挨一次）。
 //!
@@ -80,9 +82,6 @@ pub struct Strike {
     /// spawn，所有 caster-side 数值（[`HitSpec`] modifier 链）都已经烧好，
     /// caster 死了 / 走了 / 状态变了都不影响已飞出的攻击。
     pub caster: Entity,
-    /// 攻击者阵营 —— 决定哪些 unit 算"敌方"候选。命中过滤 `target.faction !=
-    /// strike.faction`（自己阵营不打自己阵营）。
-    pub faction: Faction,
     /// 攻击中心点（**世界坐标**，spawn 时快照）。
     ///
     /// - [`MeleeReach`](AttackEffect::MeleeReach) / [`SingleTarget`](AttackEffect::SingleTarget)：等于 caster 当时的世界坐标。
@@ -134,12 +133,22 @@ pub enum AttackEffect {
         reach: f32,
         /// 是否能打到飞行（无 [`IsGround`] marker）的 unit。
         hits_air: bool,
+        /// 攻击者阵营 —— 候选过滤 `target.faction != faction`。为什么阵营在这里
+        /// 而不在 [`Strike`] 顶层：参见 [`SingleTarget`](Self::SingleTarget) 的
+        /// 说明 —— 只有"扫一片候选选合规者"的 effect 才需要阵营当筛子。
+        faction: Faction,
     },
     /// 单目标锁定 —— cast 时已经决定打谁。逐帧检查 dist 是否满足。
     ///
     /// 算法：候选 = `{ target }`；过滤 dist + 地空 + 去重；命中。`already_hit`
     /// 非空时直接跳过。target 已 despawn / 已死 时本帧不命中（active 不退出，
     /// 万一是被同帧前段动作打死也接受）。
+    ///
+    /// **不查 faction** —— 上游已锁定 target entity，攻击系统不再二次过滤。
+    /// 这条路径支持的合法用例：治疗 / 嗡讽控制让 caster 打自己人 / 友军伤害 /
+    /// 自伤。跟 [`MeleeReach`](Self::MeleeReach) / [`Aoe`](Self::Aoe)
+    /// "扫一片选合规者"的语义不同 —— 那两种 effect 不能预先锁 entity，只能
+    /// 靠 faction 筛选。
     SingleTarget {
         /// 锁定的目标 entity。cast 时由玩家鼠标 / AI 选取 / 法术参数指定。
         target: Entity,
@@ -160,6 +169,9 @@ pub enum AttackEffect {
         sector: Option<Sector>,
         /// 是否能打到飞行 unit。
         hits_air: bool,
+        /// 攻击者阵营 —— 候选过滤 `target.faction != faction`。详见
+        /// [`MeleeReach::faction`](Self::MeleeReach) 同款说明。
+        faction: Faction,
     },
 }
 
@@ -270,10 +282,14 @@ struct TargetData {
 /// 给定一次 strike 的当前状态 + 全候选快照，返回这一帧新命中的 unit entity。
 fn judge_hits(strike: &Strike, candidates: &[TargetData]) -> Vec<Entity> {
     match &strike.effect {
-        AttackEffect::MeleeReach { reach, hits_air } => judge_nearest_in_circle(
+        AttackEffect::MeleeReach {
+            reach,
+            hits_air,
+            faction,
+        } => judge_nearest_in_circle(
             strike.origin,
             *reach,
-            strike.faction,
+            *faction,
             *hits_air,
             &strike.already_hit,
             candidates,
@@ -286,7 +302,6 @@ fn judge_hits(strike: &Strike, candidates: &[TargetData]) -> Vec<Entity> {
             strike.origin,
             *target,
             *reach,
-            strike.faction,
             *hits_air,
             &strike.already_hit,
             candidates,
@@ -295,11 +310,12 @@ fn judge_hits(strike: &Strike, candidates: &[TargetData]) -> Vec<Entity> {
             radius,
             sector,
             hits_air,
+            faction,
         } => judge_aoe(
             strike.origin,
             *radius,
             sector.as_ref(),
-            strike.faction,
+            *faction,
             *hits_air,
             &strike.already_hit,
             candidates,
@@ -335,12 +351,15 @@ fn judge_nearest_in_circle(
     best.into_iter().map(|(e, _)| e).collect()
 }
 
-/// 检查锁定 target 当前是否满足命中条件（候选集 + 阵营 + 地空 + 射程）。
+/// 检查锁定 target 当前是否满足命中条件（候选集 + 地空 + 去重 + 射程）。
+///
+/// **有意不查 faction** —— 上游已选定具体 entity，攻击系统不应再二次拦截。
+/// 合法用例：治疗队友 / 嗡讽控制反发、友军伤害 / 自伤。反之，MeleeReach / Aoe
+/// 本质是"扫一片选合规者"，没有 entity 锁定，必须靠 faction 筛选。
 fn judge_single_target(
     origin: Vec3,
     target: Entity,
     reach: f32,
-    faction: Faction,
     hits_air: bool,
     already_hit: &[Entity],
     candidates: &[TargetData],
@@ -349,7 +368,11 @@ fn judge_single_target(
     let Some(c) = candidates.iter().find(|c| c.entity == target) else {
         return Vec::new();
     };
-    if !is_valid_candidate(c, faction, hits_air, already_hit) {
+    // 去重 + 地空 —— 跟 is_valid_candidate 里带 faction 那版保持一致，只是抽掉阵营检查。
+    if already_hit.contains(&c.entity) {
+        return Vec::new();
+    }
+    if !c.is_ground && !hits_air {
         return Vec::new();
     }
     let d2 = xz_distance_sq(origin, c.pos);
@@ -547,5 +570,71 @@ mod tests {
             is_ground: true,
         };
         assert!(!is_valid_candidate(&dupe, attacker, true, &already_hit));
+    }
+
+    /// SingleTarget 路径**不查 faction** —— 上游已锁定 target，
+    /// 同阵营 target 也合法命中（治疗 / 嘲讽控制 / 友军伤害用例）。
+    ///
+    /// 这条测试 lock 住核心设计意图：未来谁手贱在 `judge_single_target`
+    /// 里加回 faction 过滤，这条测会红。
+    #[test]
+    fn single_target_ignores_faction() {
+        let target_e = Entity::from_raw_u32(1).unwrap();
+        let ally = TargetData {
+            entity: target_e,
+            pos: Vec3::ZERO,
+            hurt_radius: 0.3,
+            faction: Faction::Player, // 跟"攻击者"同阵营
+            is_ground: true,
+        };
+        let candidates = vec![ally];
+        let hits = judge_single_target(
+            Vec3::ZERO, // origin
+            target_e,
+            5.0, // reach 足够大
+            true,
+            &[],
+            &candidates,
+        );
+        assert_eq!(hits, vec![target_e]);
+    }
+
+    /// SingleTarget 仍然检查 already_hit 去重 —— 一次 cast 不重复命中。
+    #[test]
+    fn single_target_already_hit_skipped() {
+        let target_e = Entity::from_raw_u32(2).unwrap();
+        let target = TargetData {
+            entity: target_e,
+            pos: Vec3::ZERO,
+            hurt_radius: 0.3,
+            faction: Faction::Enemy,
+            is_ground: true,
+        };
+        let candidates = vec![target];
+        let hits = judge_single_target(
+            Vec3::ZERO,
+            target_e,
+            5.0,
+            true,
+            &[target_e], // already 命中过
+            &candidates,
+        );
+        assert!(hits.is_empty());
+    }
+
+    /// SingleTarget 仍然检查地空规则 —— hits_air=false 时不能打飞行单位。
+    #[test]
+    fn single_target_respects_air_rule() {
+        let target_e = Entity::from_raw_u32(3).unwrap();
+        let air = TargetData {
+            entity: target_e,
+            pos: Vec3::ZERO,
+            hurt_radius: 0.3,
+            faction: Faction::Enemy,
+            is_ground: false, // 飞行
+        };
+        let candidates = vec![air];
+        let hits = judge_single_target(Vec3::ZERO, target_e, 5.0, false, &[], &candidates);
+        assert!(hits.is_empty());
     }
 }

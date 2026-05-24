@@ -77,7 +77,7 @@ pub struct Projectile {
     /// 发射者 entity —— 命中 [`HitMessage::caster`]；自伤过滤也读它
     /// （`target == owner` 跳过）。
     pub owner: Entity,
-    /// 阵营 —— 跟 [`Strike::faction`](crate::unit::strike::Strike::faction)
+    /// 阵营 —— 跟 [`AttackEffect`](crate::unit::strike::AttackEffect) 里带阵营的 effect
     /// 同义，决定"哪些 unit 算敌方"。
     pub faction: Faction,
     /// 命中后果声明（modifiers / effects）—— caster-side 修正在 spawn 时

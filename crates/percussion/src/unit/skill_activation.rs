@@ -93,7 +93,6 @@ fn spawn_strike_on_skill_activated(
 
                 commands.spawn(Strike {
                     caster: ev.caster,
-                    faction: *faction,
                     // origin 在 spawn 这一刻 snapshot —— resolve 时不再读
                     // caster transform，技能 active 期间 caster 移动 / 死
                     // 亡都不影响判定位置（"凝固一击"语义）。
@@ -103,6 +102,9 @@ fn spawn_strike_on_skill_activated(
                         // 暂全部地面攻击。未来给某些 skill 加 "anti-air"
                         // 标记时从 ev.effect / SkillBook 拉出来覆盖。
                         hits_air: false,
+                        // 阵营在 effect 内 —— 只有"扫候选"型 effect 才需阵营过滤；
+                        // SingleTarget 已锁定 target，根本不带 faction 字段。
+                        faction: *faction,
                     },
                     on_hit: on_hit.clone(),
                     remaining: skill.active,
