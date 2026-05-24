@@ -38,7 +38,7 @@ use bevy::prelude::*;
 use super::facing::Facing;
 use super::hit_data::Faction;
 use super::skill::{SkillActivatedMessage, SkillBook, SkillEffectKind};
-use super::strike::{AttackEffect, Strike};
+use super::strike::{AttackEffect, CandidateSet, Strike};
 
 /// 桥接 plugin —— 只注册一个 system。
 pub struct SkillActivationPlugin;
@@ -102,9 +102,9 @@ fn spawn_strike_on_skill_activated(
                         // 暂全部地面攻击。未来给某些 skill 加 "anti-air"
                         // 标记时从 ev.effect / SkillBook 拉出来覆盖。
                         hits_air: false,
-                        // 阵营在 effect 内 —— 只有"扫候选"型 effect 才需阵营过滤；
-                        // SingleTarget 已锁定 target，根本不带 faction 字段。
-                        faction: *faction,
+                        // 候选集筛子——普通近战只扫敌方。未来 SkillBook 能带「群治
+                        // / 群友增益」语义时，这里从 ev.effect / SkillBook 拉 Ally / All 覆盖。
+                        candidates: CandidateSet::Hostile(*faction),
                     },
                     on_hit: on_hit.clone(),
                     remaining: skill.active,

@@ -46,13 +46,13 @@
 //!
 //! # `AttackEffect` 三类
 //!
-//! - [`AttackEffect::MeleeReach`] —— 单目标普攻，候选 = 全敌方 unit，每帧从中
-//!   选**最近的一个**判 dist。整个 active 期间最多命中 1 次。
+//! - [`AttackEffect::MeleeReach`] —— 单目标普攻，候选由 [`CandidateSet`] 决定，每帧从
+//!   中选**最近的一个**判 dist。整个 active 期间最多命中 1 次。
 //! - [`AttackEffect::SingleTarget`] —— 单目标锁定（cast 时已确定 target），逐帧
 //!   检查那个特定 target 的 dist。同样最多命中 1 次。**不查 faction**
 //!   —— 上游已选定 target，治疗 / 友伤 / 自伤等合法用例由此路径支持。
-//! - [`AttackEffect::Aoe`] —— **多目标**圆 / 扇形，候选 = 全敌方 unit，每帧扫
-//!   全部，per-target 去重一次性命中（同一 target 在 active 期间只挨一次）。
+//! - [`AttackEffect::Aoe`] —— **多目标**圆 / 扇形，候选同样由 [`CandidateSet`] 决定，
+//!   每帧扫全部，per-target 去重一次性命中（同一 target 在 active 期间只挨一次）。
 //!
 //! 三类共用同一套"扫候选 → 距离过滤 → 角度过滤（扇形）→ 地空过滤 → 去重 →
 //! push 到 `already_hit`"的统一流程，差别只在候选集合与"最近一个 vs 全部"。
@@ -133,10 +133,10 @@ pub enum AttackEffect {
         reach: f32,
         /// 是否能打到飞行（无 [`IsGround`] marker）的 unit。
         hits_air: bool,
-        /// 攻击者阵营 —— 候选过滤 `target.faction != faction`。为什么阵营在这里
-        /// 而不在 [`Strike`] 顶层：参见 [`SingleTarget`](Self::SingleTarget) 的
-        /// 说明 —— 只有"扫一片候选选合规者"的 effect 才需要阵营当筛子。
-        faction: Faction,
+        /// 候选集筛子 —— 只扫进入的 unit。为什么在 effect 里而不在
+        /// [`Strike`] 顶层：参见 [`SingleTarget`](Self::SingleTarget) 的说明
+        /// —— 只有"扫一片候选选合规者"的 effect 才需要筛选。
+        candidates: CandidateSet,
     },
     /// 单目标锁定 —— cast 时已经决定打谁。逐帧检查 dist 是否满足。
     ///
@@ -148,7 +148,7 @@ pub enum AttackEffect {
     /// 这条路径支持的合法用例：治疗 / 嗡讽控制让 caster 打自己人 / 友军伤害 /
     /// 自伤。跟 [`MeleeReach`](Self::MeleeReach) / [`Aoe`](Self::Aoe)
     /// "扫一片选合规者"的语义不同 —— 那两种 effect 不能预先锁 entity，只能
-    /// 靠 faction 筛选。
+    /// 靠 [`CandidateSet`] 筛选。
     SingleTarget {
         /// 锁定的目标 entity。cast 时由玩家鼠标 / AI 选取 / 法术参数指定。
         target: Entity,
@@ -159,7 +159,7 @@ pub enum AttackEffect {
     },
     /// 圆 / 扇形多目标。
     ///
-    /// 算法：候选 = 全敌方 unit；过滤 dist + 角度（若 sector 有值）+ 地空 + 去重；
+    /// 算法：候选由 [`CandidateSet`] 筛定；过滤 dist + 角度（若 sector 有值）+ 地空 + 去重；
     /// **全部命中**（不挑最近）。同一 target 在 active 期间最多挨一次。
     Aoe {
         /// AOE 半径（米）。
@@ -169,9 +169,8 @@ pub enum AttackEffect {
         sector: Option<Sector>,
         /// 是否能打到飞行 unit。
         hits_air: bool,
-        /// 攻击者阵营 —— 候选过滤 `target.faction != faction`。详见
-        /// [`MeleeReach::faction`](Self::MeleeReach) 同款说明。
-        faction: Faction,
+        /// 候选集筛子。详见 [`MeleeReach::candidates`](Self::MeleeReach) 同款说明。
+        candidates: CandidateSet,
     },
 }
 
@@ -334,11 +333,11 @@ fn judge_hits(strike: &Strike, candidates: &[TargetData]) -> Vec<Entity> {
         AttackEffect::MeleeReach {
             reach,
             hits_air,
-            faction,
+            candidates: cand_set,
         } => judge_nearest_in_circle(
             strike.origin,
             *reach,
-            *faction,
+            *cand_set,
             *hits_air,
             &strike.already_hit,
             candidates,
@@ -359,12 +358,12 @@ fn judge_hits(strike: &Strike, candidates: &[TargetData]) -> Vec<Entity> {
             radius,
             sector,
             hits_air,
-            faction,
+            candidates: cand_set,
         } => judge_aoe(
             strike.origin,
             *radius,
             sector.as_ref(),
-            *faction,
+            *cand_set,
             *hits_air,
             &strike.already_hit,
             candidates,
@@ -372,18 +371,19 @@ fn judge_hits(strike: &Strike, candidates: &[TargetData]) -> Vec<Entity> {
     }
 }
 
-/// 从候选圆内选**最近**的敌方 unit 返回（至多 1 个）。
+/// 从候选圆内选**最近**的一个 unit 返回（至多 1 个）。候选是否进入由
+/// [`CandidateSet`] 决定。
 fn judge_nearest_in_circle(
     origin: Vec3,
     reach: f32,
-    faction: Faction,
+    candidates_set: CandidateSet,
     hits_air: bool,
     already_hit: &[Entity],
     candidates: &[TargetData],
 ) -> Vec<Entity> {
     let mut best: Option<(Entity, f32)> = None;
     for c in candidates {
-        if !is_valid_candidate(c, faction, hits_air, already_hit) {
+        if !is_valid_candidate(c, candidates_set, hits_air, already_hit) {
             continue;
         }
         let d2 = xz_distance_sq(origin, c.pos);
@@ -404,7 +404,7 @@ fn judge_nearest_in_circle(
 ///
 /// **有意不查 faction** —— 上游已选定具体 entity，攻击系统不应再二次拦截。
 /// 合法用例：治疗队友 / 嗡讽控制反发、友军伤害 / 自伤。反之，MeleeReach / Aoe
-/// 本质是"扫一片选合规者"，没有 entity 锁定，必须靠 faction 筛选。
+/// 本质是"扫一片选合规者"，没有 entity 锁定，必须靠 [`CandidateSet`] 筛选。
 fn judge_single_target(
     origin: Vec3,
     target: Entity,
@@ -433,12 +433,12 @@ fn judge_single_target(
     }
 }
 
-/// 圆 / 扇形多目标 —— 全部命中（不挑最近）。
+/// 圆 / 扇形多目标 —— 全部命中（不挑最近）。候选是否进入由 [`CandidateSet`] 决定。
 fn judge_aoe(
     origin: Vec3,
     radius: f32,
     sector: Option<&Sector>,
-    faction: Faction,
+    candidates_set: CandidateSet,
     hits_air: bool,
     already_hit: &[Entity],
     candidates: &[TargetData],
@@ -448,7 +448,7 @@ fn judge_aoe(
 
     candidates
         .iter()
-        .filter(|c| is_valid_candidate(c, faction, hits_air, already_hit))
+        .filter(|c| is_valid_candidate(c, candidates_set, hits_air, already_hit))
         .filter(|c| {
             let d2 = xz_distance_sq(origin, c.pos);
             let threshold = radius + c.hurt_radius;
@@ -462,14 +462,14 @@ fn judge_aoe(
         .collect()
 }
 
-/// 共享的候选过滤：阵营不同 + 不重复 + 地空规则。
+/// 共享的候选过滤：候选集 + 不重复 + 地空规则。
 fn is_valid_candidate(
     candidate: &TargetData,
-    attacker_faction: Faction,
+    candidates_set: CandidateSet,
     hits_air: bool,
     already_hit: &[Entity],
 ) -> bool {
-    if candidate.faction == attacker_faction {
+    if !candidates_set.admits(candidate.faction) {
         return false;
     }
     if already_hit.contains(&candidate.entity) {
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn ground_only_attack_skips_air_unit() {
-        let attacker = Faction::Player;
+        let candidates = CandidateSet::Hostile(Faction::Player);
         let already_hit: Vec<Entity> = Vec::new();
         let air = TargetData {
             entity: Entity::from_raw_u32(1).unwrap(),
@@ -582,9 +582,9 @@ mod tests {
             is_ground: false,
         };
         // hits_air=false → 跳过
-        assert!(!is_valid_candidate(&air, attacker, false, &already_hit));
+        assert!(!is_valid_candidate(&air, candidates, false, &already_hit));
         // hits_air=true → 命中
-        assert!(is_valid_candidate(&air, attacker, true, &already_hit));
+        assert!(is_valid_candidate(&air, candidates, true, &already_hit));
     }
 
     #[test]
@@ -597,10 +597,10 @@ mod tests {
             faction: Faction::Player,
             is_ground: true,
         };
-        // 同阵营不打
+        // Hostile 候选集下同阵营不打
         assert!(!is_valid_candidate(
             &ally,
-            Faction::Player,
+            CandidateSet::Hostile(Faction::Player),
             true,
             &already_hit
         ));
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn already_hit_filtered() {
-        let attacker = Faction::Player;
+        let attacker = CandidateSet::Hostile(Faction::Player);
         let e = Entity::from_raw_u32(7).unwrap();
         let already_hit = vec![e];
         let dupe = TargetData {
