@@ -4,13 +4,13 @@
 //!
 //! 上游：[`strike::resolve_strikes`](super::strike::resolve_strikes) 跟
 //! [`projectile::detect_projectile_hits`](crate::projectile::detect_projectile_hits)
-//! 在 [`DamagePipeline::DetectCollision`](super::DamagePipeline::DetectCollision)
-//! 阶段用数值点-距离判定发出 [`CollisionMessage`](super::hit_data::CollisionMessage)。
+//! 在 [`DamagePipeline::DetectHits`](super::DamagePipeline::DetectHits)
+//! 阶段用数值点-距离判定发出 [`HitMessage`](super::hit_data::HitMessage)。
 //!
 //! 本模块在 [`DamagePipeline::ApplyDamage`](super::DamagePipeline::ApplyDamage)
 //! 阶段：
 //!
-//! 1. 读 [`CollisionMessage`](super::hit_data::CollisionMessage) → 拿 caster / target；
+//! 1. 读 [`HitMessage`](super::hit_data::HitMessage) → 拿 caster / target；
 //! 2. 读消息里的 [`HitSpec`](super::hit_data::HitSpec) —— `base_damage` 起跑，
 //!    沿 `modifiers` 串行跑流水线（每个 [`DamageModifier`](super::hit_data::DamageModifier)
 //!    一步），同时记录 `is_crit`；
@@ -45,7 +45,7 @@
 
 use bevy::prelude::*;
 
-use super::hit_data::{CollisionMessage, DamageModifier};
+use super::hit_data::{DamageModifier, HitMessage};
 use super::{DamageDealtMessage, DamagePipeline, Dead, Health};
 
 /// **纯函数**：给定 base 伤害 + modifier 链 + 取随机数的方式，算出最终
@@ -93,19 +93,19 @@ pub fn apply_modifiers(
 
 /// System：接 ECS 输入、调 [`apply_modifiers`] 算数、写副作用。
 ///
-/// 单条 [`CollisionMessage`] 跑完一次完整 pipeline；多条互相独立。
+/// 单条 [`HitMessage`] 跑完一次完整 pipeline；多条互相独立。
 /// 副作用集中在这里 —— 改 [`Health::current`] + 发 [`DamageDealtMessage`] +
 /// 消耗全局 RNG（通过传给 `apply_modifiers` 的闭包）。
 ///
 /// 不再反查任何来源 entity —— `spec` 已经 clone 进
-/// `CollisionMessage`，对来源（strike / projectile / 未来 DoT 虚拟来源）
+/// `HitMessage`，对来源（strike / projectile / 未来 DoT 虚拟来源）
 /// 一视同仁。
 fn calc_damage_pipeline(
-    mut collisions: MessageReader<CollisionMessage>,
+    mut hits: MessageReader<HitMessage>,
     mut q_target: Query<&mut Health, Without<Dead>>,
     mut dealt: MessageWriter<DamageDealtMessage>,
 ) {
-    for ev in collisions.read() {
+    for ev in hits.read() {
         // 死人不再被打（见模块文档"目标已死怎么办"）。
         let Ok(mut hp) = q_target.get_mut(ev.target) else {
             continue;

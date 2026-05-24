@@ -5,12 +5,12 @@
 //! 命中检测被切成"产命中事实"和"算后果"两段：
 //!
 //! - **产**：[`Strike`](super::strike::Strike) / [`Projectile`](crate::projectile::Projectile)
-//!   各自做数值距离判定，命中即发 [`CollisionMessage`]。
+//!   各自做数值距离判定，命中即发 [`HitMessage`]。
 //! - **算**：[`damage_calc`](super::damage_calc) 跑 [`HitSpec::modifiers`]
 //!   流水线 + [`hit_effects`](super::hit_effects) 派 [`HitSpec::effects`]
 //!   副作用。
 //!
-//! 两段中间靠 [`CollisionMessage`] 解耦：消息自包含 spec，**不依赖产源
+//! 两段中间靠 [`HitMessage`] 解耦：消息自包含 spec，**不依赖产源
 //! entity 仍存活**。短 lifetime 的 strike entity 可以在判定后立刻消失，
 //! 下游 system 依旧能完整结算。
 //!
@@ -62,7 +62,7 @@ pub enum Faction {
 
 /// "这次命中"的完整声明式规格 —— 由产命中的一方（strike spawn / 投射
 /// 物 spawn）填好之后塞进 entity，命中那一刻 clone 进
-/// [`CollisionMessage::spec`]。
+/// [`HitMessage::spec`]。
 ///
 /// 见模块文档 "两阶段后果拆分" + "caster-side 一切烧在 spawn 那一刻"。
 #[derive(Debug, Clone)]
@@ -98,7 +98,7 @@ pub enum DamageModifier {
 #[derive(Debug, Clone)]
 pub enum HitEffect {
     /// 把 `final_amount * ratio` 的血量回给 caster（即
-    /// [`CollisionMessage::caster`]）。
+    /// [`HitMessage::caster`]）。
     Lifesteal { ratio: f32 },
     /// 沿 caster→target 方向以 `force` 强度推 target。
     ///
@@ -128,7 +128,7 @@ pub enum HitEffect {
 /// 2. 短 lifetime 的产源（投射物命中即 despawn）在判定后立即消失也不影
 ///    响下游结算。
 #[derive(Message, Debug, Clone)]
-pub struct CollisionMessage {
+pub struct HitMessage {
     /// 攻击发起者 —— effect 系统需要它来回写 caster（吸血加血等）。
     pub caster: Entity,
     /// 被命中的 unit entity。

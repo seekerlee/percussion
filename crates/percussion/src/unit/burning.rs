@@ -11,7 +11,7 @@
 //! 不应该**再**吃一次 caster-side modifier。
 //!
 //! 若将来要让 DoT 受 target-side 抗火 / 易燃 buff 影响，更好的做法是让
-//! [`tick_burning`] 改发 [`CollisionMessage`](super::hit_data::CollisionMessage)
+//! [`tick_burning`] 改发 [`HitMessage`](super::hit_data::HitMessage)
 //! 到一个"虚拟来源" —— 但首版不做。
 //!
 //! # 在 pipeline 里的位置

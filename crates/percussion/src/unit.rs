@@ -219,7 +219,7 @@ pub struct Strength(pub f32);
 /// 拿到就直接用，不用再担心 race / 重复结算。
 ///
 /// **自包含 `effects`**（clone in），让 [`hit_effects`] 无需反查来源
-/// entity。原因详见 [`CollisionMessage`](hit_data::CollisionMessage) 同款理由。
+/// entity。原因详见 [`HitMessage`](hit_data::HitMessage) 同款理由。
 #[derive(Message, Debug, Clone)]
 pub struct DamageDealtMessage {
     /// 攻击发起者。effect 系统需要它来回写 caster（吸血加血）。
@@ -263,8 +263,8 @@ pub struct UnitDiedMessage {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DamagePipeline {
     /// [`strike`] / [`crate::projectile`] 按 XZ 距离扫出命中，发
-    /// [`CollisionMessage`](hit_data::CollisionMessage)。
-    DetectCollision,
+    /// [`HitMessage`](hit_data::HitMessage)。
+    DetectHits,
     /// [`damage_calc`] 跑 modifier 流水线，把最终伤害扣到
     /// [`Health`]，发 [`DamageDealtMessage`]。
     ApplyDamage,
@@ -288,7 +288,7 @@ pub struct UnitPlugin;
 
 impl Plugin for UnitPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<hit_data::CollisionMessage>()
+        app.add_message::<hit_data::HitMessage>()
             .add_message::<DamageDealtMessage>()
             .add_message::<UnitDiedMessage>()
             // 把整条 damage pipeline 的 5 个 set 串成一条链。各 set 内部
@@ -297,7 +297,7 @@ impl Plugin for UnitPlugin {
             .configure_sets(
                 Update,
                 (
-                    DamagePipeline::DetectCollision,
+                    DamagePipeline::DetectHits,
                     DamagePipeline::ApplyDamage,
                     DamagePipeline::Effects,
                     DamagePipeline::PersistentEffects,

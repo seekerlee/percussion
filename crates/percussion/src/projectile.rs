@@ -7,7 +7,7 @@
 //!
 //! 1. **命中判定**：球心到敌方 unit 中心的 XZ 距离 ≤ `proj.radius +
 //!    hurt_radius` 即命中 → 发
-//!    [`CollisionMessage`](crate::unit::hit_data::CollisionMessage) + despawn
+//!    [`HitMessage`](crate::unit::hit_data::HitMessage) + despawn
 //! 2. **轨迹**：每帧"该往哪移动多少"（直线、抛物线、追踪……）
 //! 3. **寿命 + 撞墙**：超时 / shape_cast 撞 `GameLayer::Terrain` 即 despawn
 //!
@@ -20,7 +20,7 @@
 //! - `Projectile`：origin 跟着 transform 移动，每帧扫一遍候选，**一发一命中**
 //!
 //! 所以不复用 `Strike` —— 共享会污染 strike 的"origin 不变"约定。各走各
-//! 的 system，都直接发同一种 [`CollisionMessage`]，下游
+//! 的 system，都直接发同一种 [`HitMessage`]，下游
 //! [`damage_calc`](crate::unit::damage_calc) 一视同仁。
 //!
 //! # 为什么不走 avian sensor
@@ -43,7 +43,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::unit::hit_data::{CollisionMessage, Faction, HitSpec};
+use crate::unit::hit_data::{Faction, HitMessage, HitSpec};
 use crate::unit::{DamagePipeline, Dead, HurtRadius};
 
 pub mod linear;
@@ -74,14 +74,14 @@ const PROJECTILE_RADIUS: f32 = 0.15;
 /// （每帧变）。已经在 `Transform` 里就不重复存。
 #[derive(Component, Debug)]
 pub struct Projectile {
-    /// 发射者 entity —— 命中 [`CollisionMessage::caster`]；自伤过滤也读它
+    /// 发射者 entity —— 命中 [`HitMessage::caster`]；自伤过滤也读它
     /// （`target == owner` 跳过）。
     pub owner: Entity,
     /// 阵营 —— 跟 [`Strike::faction`](crate::unit::strike::Strike::faction)
     /// 同义，决定"哪些 unit 算敌方"。
     pub faction: Faction,
     /// 命中后果声明（modifiers / effects）—— caster-side 修正在 spawn 时
-    /// 烧好。命中那一帧 clone 进 [`CollisionMessage::spec`]。
+    /// 烧好。命中那一帧 clone 进 [`HitMessage::spec`]。
     pub spec: HitSpec,
     /// 剩余存活秒数；归零 despawn（无视有没有命中）。
     pub remaining: f32,
@@ -130,8 +130,8 @@ pub fn spawn_linear_projectile(
 /// 投射物子系统的注册点。
 ///
 /// - [`detect_projectile_hits`]：每帧 tick lifetime + 命中扫描，命中或超
-///   时即 despawn。在 [`DamagePipeline::DetectCollision`] set，跟
-///   [`Strike`](crate::unit::strike::Strike) 同位置发 [`CollisionMessage`]。
+///   时即 despawn。在 [`DamagePipeline::DetectHits`] set，跟
+///   [`Strike`](crate::unit::strike::Strike) 同位置发 [`HitMessage`]。
 /// - [`linear::advance_linear_motion`]：直线轨迹推进 + 撞墙销毁。
 pub struct ProjectilePlugin;
 
@@ -139,7 +139,7 @@ impl Plugin for ProjectilePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            detect_projectile_hits.in_set(DamagePipeline::DetectCollision),
+            detect_projectile_hits.in_set(DamagePipeline::DetectHits),
         )
         .add_systems(
             PostUpdate,
@@ -152,7 +152,7 @@ impl Plugin for ProjectilePlugin {
     }
 }
 
-/// 每帧推进 projectile 寿命 + 跑命中判定 + 发 [`CollisionMessage`]。
+/// 每帧推进 projectile 寿命 + 跑命中判定 + 发 [`HitMessage`]。
 ///
 /// 一发一命中：第一次命中合法敌方即发 message + despawn，本帧不再扫剩
 /// 余候选。同帧多发 projectile 互不影响（per-entity 循环独立）。
@@ -163,7 +163,7 @@ impl Plugin for ProjectilePlugin {
 fn detect_projectile_hits(
     time: Res<Time>,
     mut commands: Commands,
-    mut collisions: MessageWriter<CollisionMessage>,
+    mut hits: MessageWriter<HitMessage>,
     mut q_projectile: Query<(Entity, &Transform, &mut Projectile)>,
     q_target: Query<
         (Entity, &Transform, &HurtRadius, &Faction),
@@ -201,7 +201,7 @@ fn detect_projectile_hits(
             let d2 = dx * dx + dz * dz;
             let threshold = proj.radius + target_radius;
             if d2 <= threshold * threshold {
-                collisions.write(CollisionMessage {
+                hits.write(HitMessage {
                     caster: proj.owner,
                     target: *target_e,
                     spec: proj.spec.clone(),

@@ -136,7 +136,7 @@ pub enum SkillEffectKind {
         /// 命中后果（伤害 / buff / 击退 …）的**声明性描述**。
         ///
         /// 见 [`HitSpec`] —— 桥接 system 用它构造 [`Strike`] 的
-        /// `on_hit`，命中那一刻 clone 进 `CollisionMessage`，下游
+        /// `on_hit`，命中那一刻 clone 进 `HitMessage`，下游
         /// modifier / effect 流水线消费。
         on_hit: HitSpec,
     },

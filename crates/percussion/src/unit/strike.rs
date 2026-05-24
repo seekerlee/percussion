@@ -55,10 +55,10 @@
 //! 三类共用同一套"扫候选 → 距离过滤 → 角度过滤（扇形）→ 地空过滤 → 去重 →
 //! push 到 `already_hit`"的统一流程，差别只在候选集合与"最近一个 vs 全部"。
 //!
-//! # 命中下游：发 `CollisionMessage`
+//! # 命中下游：发 `HitMessage`
 //!
 //! 判定到新命中时，本模块发
-//! [`CollisionMessage`](super::hit_data::CollisionMessage)。`spec` 字段由
+//! [`HitMessage`](super::hit_data::HitMessage)。`spec` 字段由
 //! [`Strike::on_hit`] clone 进消息（caster-side 修正在 spawn 时已烙好），
 //! 下游 [`damage_calc`](super::damage_calc) / [`hit_effects`](super::hit_effects)
 //! 无需区分来源 —— [`Projectile`](crate::projectile::Projectile) 也发同一种
@@ -67,7 +67,7 @@
 use bevy::prelude::*;
 
 use super::DamagePipeline;
-use super::hit_data::{CollisionMessage, Faction, HitSpec};
+use super::hit_data::{Faction, HitMessage, HitSpec};
 use super::{Dead, HurtRadius, IsGround};
 
 /// 活态命中判定对象 —— 一次施法在 active 阶段的具象化。
@@ -180,11 +180,11 @@ pub struct Sector {
 }
 
 /// 推进所有 [`Strike`] 的 lifetime + 跑命中判定 + 发
-/// [`CollisionMessage`].
+/// [`HitMessage`].
 ///
-/// 注册在 [`DamagePipeline::DetectCollision`] set 内。跟
+/// 注册在 [`DamagePipeline::DetectHits`] set 内。跟
 /// [`Projectile`](crate::projectile::Projectile) 的命中检测同 set，两者发
-/// 同一种 `CollisionMessage`，下游 [`super::damage_calc`] 一视同仁处理。
+/// 同一种 `HitMessage`，下游 [`super::damage_calc`] 一视同仁处理。
 //
 // `clippy::type_complexity`：Bevy Query 参数本来就由 5+ 个类型参数拼成，
 // clippy 默认阈值会报。折成 `type` 别名又会触发 invariant lifetime 问题
@@ -193,7 +193,7 @@ pub struct Sector {
 fn resolve_strikes(
     time: Res<Time>,
     mut commands: Commands,
-    mut collisions: MessageWriter<CollisionMessage>,
+    mut hits: MessageWriter<HitMessage>,
     mut q_strike: Query<(Entity, &mut Strike)>,
     q_target: Query<
         (Entity, &Transform, &HurtRadius, &Faction, Has<IsGround>),
@@ -239,11 +239,11 @@ fn resolve_strikes(
         // 跑命中判定 —— 纯函数，输入 strike state + 候选快照，输出新命中。
         let new_hits = judge_hits(&strike, &candidates);
 
-        // 给每个新命中发一条 CollisionMessage。spec 从 on_hit clone 进消息
+        // 给每个新命中发一条 HitMessage。spec 从 on_hit clone 进消息
         // —— Strike 本身可能在下一帧就 despawn（lifetime 归零），下游不能
         // 依赖 Strike entity 存活。
         for &target in &new_hits {
-            collisions.write(CollisionMessage {
+            hits.write(HitMessage {
                 caster: strike.caster,
                 target,
                 spec: strike.on_hit.clone(),
@@ -441,14 +441,14 @@ impl Plugin for StrikePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            resolve_strikes.in_set(DamagePipeline::DetectCollision),
+            resolve_strikes.in_set(DamagePipeline::DetectHits),
         );
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! 几何辅助函数的单元测试。Strike → CollisionMessage 派发等 system 级别
+    //! 几何辅助函数的单元测试。Strike → HitMessage 派发等 system 级别
     //! 测试等接通 message 后再加。
 
     use super::*;
