@@ -191,6 +191,55 @@ pub struct Sector {
     pub half_angle_deg: f32,
 }
 
+/// 候选集筛选器 —— "这一击在几何扫描时把哪些 unit 纳入考虑"。
+///
+/// # 这个类型解决什么问题
+///
+/// 扫描型 [`AttackEffect`]（[`MeleeReach`](AttackEffect::MeleeReach) /
+/// [`Aoe`](AttackEffect::Aoe)）需要在 candidates 里挑出"自己关心的那些"。
+/// 以前 effect 直接带 `faction: Faction` 把"只打不同阵营"写死了，表达力
+/// 不够：
+///
+/// - 群伤要"只打异阵营"
+/// - 群体治疗要"只打同阵营"
+/// - 双效 AoE（如圣光新星）要"敌友都扫"，命中后由结算层按关系派发
+/// - 自爆 / 龙息要"全打"含友军伤害
+///
+/// 用一个 enum 显式列出这几种语义，调用方构造时强制选，**没有默认值**
+/// —— 不存在"忘填 faction 默认只伤敌"的暗设定。
+///
+/// # 跟 [`HitSpec`] 的分工
+///
+/// 这一层是**粗筛**：几何扫描时就裁掉不该进入命中流的候选，省 message。
+/// 命中后"对这个 target 具体作用什么效果"是 [`HitSpec`] 那边的事，本类
+/// 型不管。
+///
+/// [`SingleTarget`](AttackEffect::SingleTarget) 不需要 candidate
+/// 筛选 —— 上游已锁定具体 entity，没有"候选集"概念。
+#[derive(Debug, Clone, Copy)]
+pub enum CandidateSet {
+    /// 只扫与给定 faction **不同**阵营的 unit。最常见：单体 / 群体攻击。
+    Hostile(Faction),
+    /// 只扫与给定 faction **相同**阵营的 unit。用例：群体治疗 / 友方光环。
+    Ally(Faction),
+    /// 全扫，不按阵营过滤。用例：双效 AoE、龙息、自爆、中立陷阱。
+    All,
+}
+
+impl CandidateSet {
+    /// 判定某 `candidate` 阵营是否在本候选集内。
+    ///
+    /// 这是最小的语义函数 —— 上层 `is_valid_candidate` 在它基础上再叠加
+    /// `already_hit` / 地空规则等正交检查。
+    pub fn admits(&self, candidate: Faction) -> bool {
+        match self {
+            CandidateSet::Hostile(caster) => candidate != *caster,
+            CandidateSet::Ally(caster) => candidate == *caster,
+            CandidateSet::All => true,
+        }
+    }
+}
+
 /// 推进所有 [`Strike`] 的 lifetime + 跑命中判定 + 发
 /// [`HitMessage`].
 ///
@@ -636,5 +685,37 @@ mod tests {
         let candidates = vec![air];
         let hits = judge_single_target(Vec3::ZERO, target_e, 5.0, false, &[], &candidates);
         assert!(hits.is_empty());
+    }
+
+    // —— CandidateSet ——
+
+    #[test]
+    fn hostile_admits_opposite_faction() {
+        let set = CandidateSet::Hostile(Faction::Player);
+        assert!(set.admits(Faction::Enemy));
+    }
+
+    #[test]
+    fn hostile_rejects_same_faction() {
+        let set = CandidateSet::Hostile(Faction::Player);
+        assert!(!set.admits(Faction::Player));
+    }
+
+    #[test]
+    fn ally_admits_same_faction() {
+        let set = CandidateSet::Ally(Faction::Player);
+        assert!(set.admits(Faction::Player));
+    }
+
+    #[test]
+    fn ally_rejects_opposite_faction() {
+        let set = CandidateSet::Ally(Faction::Player);
+        assert!(!set.admits(Faction::Enemy));
+    }
+
+    #[test]
+    fn all_admits_anyone() {
+        assert!(CandidateSet::All.admits(Faction::Player));
+        assert!(CandidateSet::All.admits(Faction::Enemy));
     }
 }
