@@ -115,9 +115,9 @@ pub enum SkillEffectKind {
     ///
     /// **TODO（扇形 / 锥形扩展）**：要做"横扫 vs 直刺"或"扇形 AoE"，
     /// 加新 variant（如 `MeleeFan { reach, half_angle, offset, on_hit }`
-    /// / `Aoe { radius, cone, on_hit }`），bridge 翻成
+    /// / `Aoe { radius, sector, on_hit }`），bridge 翻成
     /// [`AttackEffect::Aoe`](super::strike::AttackEffect::Aoe) +
-    /// [`Cone`](super::strike::Cone)（已就位）。**不要**把扇形参数加
+    /// [`Sector`](super::strike::Sector)（已就位）。**不要**把扇形参数加
     /// 回 `MeleeReach` —— 那会把"直线"和"扇形"两种语义糊在一起。
     MeleeReach {
         /// 沿 facing 方向的全长 —— **攻击够多远**（剑的长度 / 体术伸臂）。

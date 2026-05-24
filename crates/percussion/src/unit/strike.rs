@@ -150,22 +150,26 @@ pub enum AttackEffect {
     },
     /// 圆 / 扇形多目标。
     ///
-    /// 算法：候选 = 全敌方 unit；过滤 dist + 角度（若 cone 有值）+ 地空 + 去重；
+    /// 算法：候选 = 全敌方 unit；过滤 dist + 角度（若 sector 有值）+ 地空 + 去重；
     /// **全部命中**（不挑最近）。同一 target 在 active 期间最多挨一次。
     Aoe {
         /// AOE 半径（米）。
         radius: f32,
         /// 若 `Some`，进一步过滤为扇形（夹角 `2 * half_angle_deg`，对称轴
         /// `facing`）；`None` 即整圆。
-        cone: Option<Cone>,
+        sector: Option<Sector>,
         /// 是否能打到飞行 unit。
         hits_air: bool,
     },
 }
 
 /// 扇形过滤参数 —— 在 [`AttackEffect::Aoe`] 的圆形基础上再加一层夹角约束。
+///
+/// 数学意义上的 "圆扇形 (circular sector)"：圆内被两条半径夹住的那一块。
+/// 不叫 `Cone` 是因为：（1）`Cone` 字面 = 3D 圆锥，这里是 XZ 平面 2D 形
+/// 状；（2）Bevy 0.18 prelude 已有同名的 3D 几何 primitive，避免重名歧义。
 #[derive(Debug, Clone, Copy)]
-pub struct Cone {
+pub struct Sector {
     /// 扇形对称轴 —— 世界 XZ 平面上的**单位向量**，`.x` 对应世界 X，`.y` 对应
     /// 世界 Z（top-down 投影约定）。spawn 时快照（一般来自 caster 的
     /// [`Facing`](super::facing::Facing) 或某个固定方向）。
@@ -289,12 +293,12 @@ fn judge_hits(strike: &Strike, candidates: &[TargetData]) -> Vec<Entity> {
         ),
         AttackEffect::Aoe {
             radius,
-            cone,
+            sector,
             hits_air,
         } => judge_aoe(
             strike.origin,
             *radius,
-            cone.as_ref(),
+            sector.as_ref(),
             strike.faction,
             *hits_air,
             &strike.already_hit,
@@ -361,14 +365,14 @@ fn judge_single_target(
 fn judge_aoe(
     origin: Vec3,
     radius: f32,
-    cone: Option<&Cone>,
+    sector: Option<&Sector>,
     faction: Faction,
     hits_air: bool,
     already_hit: &[Entity],
     candidates: &[TargetData],
 ) -> Vec<Entity> {
-    let cos_half = cone.map(|c| c.half_angle_deg.to_radians().cos());
-    let facing = cone.map(|c| c.facing);
+    let cos_half = sector.map(|c| c.half_angle_deg.to_radians().cos());
+    let facing = sector.map(|c| c.facing);
 
     candidates
         .iter()
@@ -379,7 +383,7 @@ fn judge_aoe(
             d2 <= threshold * threshold
         })
         .filter(|c| match (facing, cos_half) {
-            (Some(facing), Some(cos_half)) => in_cone(origin, c.pos, facing, cos_half),
+            (Some(facing), Some(cos_half)) => in_sector(origin, c.pos, facing, cos_half),
             _ => true,
         })
         .map(|c| c.entity)
@@ -418,7 +422,7 @@ fn xz_distance_sq(a: Vec3, b: Vec3) -> f32 {
 ///
 /// 退化情况：`point == origin`（距离 0）视为命中 —— 跟自己重合，方向未定义，
 /// 但显然在任何扇形内。
-fn in_cone(origin: Vec3, point: Vec3, facing: Vec2, cos_half: f32) -> bool {
+fn in_sector(origin: Vec3, point: Vec3, facing: Vec2, cos_half: f32) -> bool {
     let dx = point.x - origin.x;
     let dz = point.z - origin.z;
     let len_sq = dx * dx + dz * dz;
@@ -458,34 +462,34 @@ mod tests {
     }
 
     #[test]
-    fn in_cone_self_overlap_is_hit() {
+    fn in_sector_self_overlap_is_hit() {
         // 跟自己同位置，方向未定，按约定算命中
         let p = Vec3::ZERO;
-        assert!(in_cone(p, p, Vec2::X, 0.5));
+        assert!(in_sector(p, p, Vec2::X, 0.5));
     }
 
     #[test]
-    fn in_cone_along_axis_is_hit() {
+    fn in_sector_along_axis_is_hit() {
         // 正前方 +X 方向，必然命中（dot=1 >= cos_half 任何 ≤1 的值）
         let origin = Vec3::ZERO;
         let point = Vec3::new(5.0, 0.0, 0.0);
         let facing = Vec2::new(1.0, 0.0);
         let cos_half = 30.0_f32.to_radians().cos();
-        assert!(in_cone(origin, point, facing, cos_half));
+        assert!(in_sector(origin, point, facing, cos_half));
     }
 
     #[test]
-    fn in_cone_outside_is_miss() {
+    fn in_sector_outside_is_miss() {
         // 正侧方 +Z 方向，跟 facing=+X 夹角 90°，超出 30° 半角
         let origin = Vec3::ZERO;
         let point = Vec3::new(0.0, 0.0, 5.0);
         let facing = Vec2::new(1.0, 0.0);
         let cos_half = 30.0_f32.to_radians().cos();
-        assert!(!in_cone(origin, point, facing, cos_half));
+        assert!(!in_sector(origin, point, facing, cos_half));
     }
 
     #[test]
-    fn in_cone_boundary_at_half_angle() {
+    fn in_sector_boundary_at_half_angle() {
         // 夹角刚好 = 半角（cos(60°) ≈ 0.5），应该命中（>= 是非严格）
         let origin = Vec3::ZERO;
         // facing = +X，point 在 60° 方向 = (cos60°, sin60°) = (0.5, ≈0.866)
@@ -494,7 +498,7 @@ mod tests {
         let cos_half = 60.0_f32.to_radians().cos();
         // dot = cos(夹角) ≈ 0.5；cos_half = 0.5；非严格 >= 命中。
         // 浮点容差小幅放宽
-        assert!(in_cone(origin, point, facing, cos_half - 1e-4));
+        assert!(in_sector(origin, point, facing, cos_half - 1e-4));
     }
 
     #[test]
