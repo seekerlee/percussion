@@ -195,7 +195,7 @@ pub struct IsGround;
 /// 角色的"攻击力"系数 —— 让 [`Strike`](strike::Strike) /
 /// [`Projectile`](crate::projectile::Projectile) spawn 时把 caster 的整体输出
 /// 系数烙进 [`HitSpec`](hit_data::HitSpec) 的 modifier 流水线里（详见
-/// [`skill_strike`](crate::unit::skill_strike) 的 bridge system）。
+/// [`skill_activation`](crate::unit::skill_activation) 的 bridge system）。
 ///
 /// 这是个**示例性**的 caster-side 通用 stat —— 真正决定一个角色"打多痛"
 /// 的远不止这一个 stat（武器加成、状态加成、buff、暴击率……）。目前
@@ -395,5 +395,5 @@ pub mod hit_triggers;
 pub mod movement;
 pub mod player;
 pub mod skill;
-pub mod skill_strike;
+pub mod skill_activation;
 pub mod strike;

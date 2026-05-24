@@ -109,7 +109,7 @@ impl Plugin for GamePlugin {
             unit::hit_triggers::HitTriggersPlugin,
             unit::burning::BurningPlugin,
             unit::skill::SkillPlugin,
-            unit::skill_strike::SkillStrikePlugin,
+            unit::skill_activation::SkillActivationPlugin,
             unit::strike::StrikePlugin,
             projectile::ProjectilePlugin,
             sprite_billboard::BillboardPlugin,

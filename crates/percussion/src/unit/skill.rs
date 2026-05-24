@@ -107,7 +107,7 @@ pub enum SkillEffectKind {
     ///          │
     /// ```
     ///
-    /// 桥接 system（[`super::skill_strike`]）把它翻译成
+    /// 桥接 system（[`super::skill_activation`]）把它翻译成
     /// [`AttackEffect::MeleeReach`](super::strike::AttackEffect::MeleeReach)
     /// 的圆形点-距判定：在以 `(offset.x + reach/2)` 为半径的圆里找最
     /// 近目标。当前实现**忽略 reach 后半段**视觉宽度差异（横扫 vs 直
@@ -283,7 +283,7 @@ pub struct CastSkillRequest {
 
 /// Fired once when a cast enters Active phase.
 ///
-/// [`super::skill_strike`] / [`crate::projectile`] subscribe to this and spawn
+/// [`super::skill_activation`] / [`crate::projectile`] subscribe to this and spawn
 /// effects (Strike entity / projectile).
 ///
 /// **不再是 `Copy`**：[`SkillEffectKind`] 内含 [`HitSpec`]（持有 Vec），
@@ -312,7 +312,7 @@ impl Plugin for SkillPlugin {
                 (
                     // recompute 必须在 cast / activate 系统之前 —— 这样
                     // intent / source 同帧变化能立刻反映到本帧的施法 +
-                    // strike spawn。skill_strike 的 bridge 也读 SkillBook
+                    // strike spawn。skill_activation 的 bridge 也读 SkillBook
                     // 拿 active 时长，链头放 recompute 同样保险。
                     recompute_skill_book,
                     tick_skill_cooldowns,

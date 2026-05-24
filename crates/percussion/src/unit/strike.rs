@@ -20,7 +20,7 @@
 //! | `SkillCast` | windup + active + recovery 整体 | `skill.windup + active + recovery` | `CastSkillRequest` |
 //! | `Strike`    | **仅 active 那段**             | `skill.active`                    | `SkillActivatedMessage` |
 //!
-//! 一次 cast 进入 active 那一帧由桥接模块（`skill_strike`）spawn 一个 `Strike`，
+//! 一次 cast 进入 active 那一帧由桥接模块（`skill_activation`）spawn 一个 `Strike`，
 //! 它的 lifetime 跟 active phase 同步推进，归零 despawn。
 //!
 //! # 为什么不用 avian sensor

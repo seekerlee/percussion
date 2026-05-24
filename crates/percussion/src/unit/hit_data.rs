@@ -30,7 +30,7 @@
 //!
 //! # caster-side 一切烧在 spawn 那一刻
 //!
-//! 重要约定：bridge（[`super::skill_strike`] / 投射物 / 陷阱）在 spawn
+//! 重要约定：bridge（[`super::skill_activation`] / 投射物 / 陷阱）在 spawn
 //! strike / projectile 之前，要把"caster 的 Strength / 武器倍率 / 全局
 //! buff"全部读出来、折算成具体的 [`DamageModifier::Mul`] 值塞进
 //! [`HitSpec::modifiers`]。

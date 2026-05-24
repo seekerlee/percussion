@@ -97,7 +97,7 @@ pub struct Projectile {
 /// `CollisionLayers` / `CollidingEntities` —— 见模块文档。
 ///
 /// 参数 `damage` / `lifetime` 暂裸传，未来若有真正的远程技能，应该改
-/// 成接 [`HitSpec`] 让 skill 系统统一管理（跟近战 `skill_strike` 同款）。
+/// 成接 [`HitSpec`] 让 skill 系统统一管理（跟近战 `skill_activation` 同款）。
 pub fn spawn_linear_projectile(
     commands: &mut Commands,
     owner: Entity,

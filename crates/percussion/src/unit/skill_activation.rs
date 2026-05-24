@@ -41,9 +41,9 @@ use super::skill::{SkillActivatedMessage, SkillBook, SkillEffectKind};
 use super::strike::{AttackEffect, Strike};
 
 /// 桥接 plugin —— 只注册一个 system。
-pub struct SkillStrikePlugin;
+pub struct SkillActivationPlugin;
 
-impl Plugin for SkillStrikePlugin {
+impl Plugin for SkillActivationPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, spawn_strike_on_skill_activated);
     }
