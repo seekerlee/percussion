@@ -20,6 +20,7 @@ path = "src/main.rs"
 bevy = { workspace = true }
 avian3d = { workspace = true }
 bevy_sprite3d = { workspace = true }
+bevy_aseprite_ultra = { workspace = true }
 bevy_asset_loader = { workspace = true }
 bevy_panorbit_camera = { workspace = true }
 bevy-inspector-egui = { workspace = true }

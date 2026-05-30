@@ -119,10 +119,27 @@ impl Plugin for GamePlugin {
             // mesh / material 资产内部缓存，多 entity 共享。详见
             // `unit/player.rs` 的 spawn 路径示例。
             bevy_sprite3d::prelude::Sprite3dPlugin,
+            // bevy_aseprite_ultra：`.aseprite` 二进制文件 loader。注册
+            // `Aseprite` asset 类型 + `AssetLoader`。本项目**只用它的
+            // loader 角色**，不挂 `AseSlice` / `AseAnimation` 组件 ——
+            // spawn 时直接读 `Aseprite::atlas_image` / `atlas_layout` /
+            // `slices[...].atlas_id`，喂给现有 `bevy_sprite3d` 路径。
+            // 详见 `stage/forest.rs` 模块顶部注释。
+            //
+            // 注：聚合插件会顺带 add ultra 自家的 slice / animation
+            // system，那些 system 因为没人挂对应组件每帧跑空，开销
+            // 可忽略。后续真要抠这点开销可以只 add 子插件
+            // `AsepriteLoaderPlugin`，目前不优化。
+            bevy_aseprite_ultra::prelude::AsepriteUltraPlugin,
             stage::StagePlugin,
             unit::player::PlayerPlugin,
             unit::dragon1::Dragon1Plugin,
         ))
+        // Bevy 的 `Plugins` trait 元组实现上限 15 个元素，上面这组已经
+        // 满 15 个，再加得**起新元组**而不是塞进去。这里只有
+        // `ForestPlugin`，但同模式后续每个新领域 plugin 都可以追加进来，
+        // 等数量再次接近 15 时再拆第三组。
+        .add_plugins((stage::forest::ForestPlugin,))
         .add_systems(Startup, (spawn_camera, spawn_global_light))
         // 初始场景放到 `OnEnter(InGame)`：进到这个 state 时所有
         // `AssetCollection` 都保证已 insert，spawn 路径里 `Res<PlayerAssets>`
@@ -208,12 +225,14 @@ fn spawn_initial_scene(
     mut commands: Commands,
     player_assets: Res<unit::player::PlayerAssets>,
     dragon1_assets: Res<unit::dragon1::Dragon1Assets>,
+    forest_assets: Res<stage::forest::ForestAssets>,
+    aseprites: Res<Assets<bevy_aseprite_ultra::prelude::Aseprite>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // 初始 stage 尺寸（地面 X × Z 全长，米）—— 本游戏的开局关卡决策，
     // 不是 stage 这个能力的固有属性。
-    let size = Vec2::new(20.0, 15.0);
+    let size = Vec2::new(80.0, 60.0);
     // 盒子净空高度（米）：物理屏障 + 视觉罩的顶面就在这个高度。保守值，
     // 等子弹弹道做出来再调。
     let height = 10.0;
@@ -230,7 +249,7 @@ fn spawn_initial_scene(
     // 用来肉眼检查 sprite billboard 在屏幕各位置的视觉对齐。所有 Player
     // 共享 input system 会一起动，方便观察运动中的视觉对齐。
     //
-    // stage 是 20m × 15m，X ∈ [-10, 10]、Z ∈ [-7.5, 7.5]；
+    // stage 是 80m × 60m，X ∈ [-40, 40]、Z ∈ [-30, 30]；
     // 取 X = [-8, -4, 0, 4, 8]（5 列）× Z = [-6, -2, 2, 6]（4 行），
     // 间距 4m 远大于 PLAYER_BODY_RADIUS = 0.4m，不会互挤。
     for x_idx in 0..5 {
@@ -253,5 +272,18 @@ fn spawn_initial_scene(
         &dragon1_assets,
         stage_entity,
         Vec3::new(3.0, 5.0, 0.0),
+    );
+
+    // Forest aseprite smoke test —— 验证 `bevy_aseprite_ultra` loader +
+    // 自家 `Sprite3d` + billboard 路径打通。等观察到树木正确显示且朝
+    // 相机后，再讨论 spawn helper / 关卡布树等抽象。摆在玩家网格右侧
+    // 空地（X = 15），方便对照其他单位看尺寸 / 朝向。
+    stage::forest::spawn_tree(
+        &mut commands,
+        &forest_assets,
+        &aseprites,
+        "tree1",
+        stage_entity,
+        Vec3::new(15.0, 0.0, 0.0),
     );
 }

@@ -49,6 +49,8 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 use crate::physics_layers::GameLayer;
 
+pub mod forest;
+
 /// 标记一个 entity 是 stage 的根。
 ///
 /// 这个组件本身不携带数据；具体边界 / 内容由同实体上的其他组件描述。

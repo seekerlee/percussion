@@ -17,6 +17,15 @@ avian3d = "0.6.1"
 # 算物理尺寸；内部 cache 让同一张图 / atlas 帧只生成一次 mesh / material。
 # billboard 行为仍由本仓自家的 `sprite_billboard` 模块负责（仅 Y 轴 yaw）。
 bevy_sprite3d = "8.0"
+# Aseprite 文件加载器：把 `.aseprite` 二进制源文件解析成内部 atlas
+# (`Aseprite::atlas_image` + `atlas_layout`) 加 slice / tag / frame meta。
+# 本项目**不**用它自带的 `AseSlice` / `AseAnimation` 组件（那些走自定义
+# render target，跟项目现有 `bevy_sprite3d` + `StandardMaterial` 路径冲突）。
+# 我们只把 ultra 当 aseprite 解析器：spawn 时从 `Assets<Aseprite>` 拿
+# `atlas_image` + `atlas_layout` + 对应 slice 的 `atlas_id`，喂给标准
+# `Sprite::from_atlas_image(...)` + `Sprite3d` —— 跟 dragon1 / player
+# 的 PNG sheet 路径完全同构，上层不感知 sprite 是来自 PNG 还是 aseprite。
+bevy_aseprite_ultra = "0.8"
 # 资产预加载框架：配合 `States` 做 Loading 阶段，领域 plugin 用
 # `#[derive(AssetCollection)]` 声明自家资产，加载完成后自动插
 # 成 Resource、并切到下一个 state。避免手写轮询 + 手存 `Handle<T>`。
