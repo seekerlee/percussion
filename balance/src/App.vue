@@ -3,7 +3,7 @@ import { RouterLink, RouterView } from 'vue-router'
 </script>
 
 <template>
-  <div class="min-h-screen bg-bg text-ink font-serif">
+  <div class="min-h-screen bg-bg text-ink font-sans">
     <nav class="border-b border-gray-200 px-6 py-3 flex items-center gap-6">
       <span class="font-bold text-lg text-accent">Percussion 数值策划</span>
       <RouterLink

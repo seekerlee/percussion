@@ -10,6 +10,18 @@ export const router = createRouter({
       component: () => import('../views/HomeView.vue'),
     },
     {
+      path: '/anchor',
+      name: 'Level 1 Anchor',
+      meta: { nav: true },
+      component: () => import('../views/AnchorView.vue'),
+    },
+    {
+      path: '/xp-curve',
+      name: 'XP Curve',
+      meta: { nav: true },
+      component: () => import('../views/XpCurveView.vue'),
+    },
+    {
       path: '/power-curve',
       name: 'Power Curve',
       meta: { nav: true },
