@@ -248,7 +248,148 @@ L1 属性 = **名词（量）**：每条是一个有基础值、进战斗公式�
 | 吸蓝率 | `mana_steal` | 0 | 命中回蓝 |
 | 击杀回血 / 回蓝 | `on_kill_restore` | 0 | 击杀触发 |
 
-## 7. 待回答的元问题
+## 7. 未纳入 L0/L1 但需要设计的战斗特效类参数
+
+> 这些参数在多数 ARPG 中存在，本项目预期走**词缀 / 熟练度**承担，不进 L0/L1 基础表。具体方案待设计。
+
+| 项目 | 备注 |
+|---|---|
+| 抗性穿透 / 忽视抗性 | |
+| 伤害类型转换（物理→元素、元素→元素） | |
+| DOT 倍率 / DOT 持续时间 | |
+| 受治疗加成 | |
+| 护盾 / 屏障（临时 HP 层） | |
+| 减伤上限 / 抗性渐近曲线形态 | |
+
+## 8. 未纳入属性系统的非战斗维度
+
+> 许多 RPG 有影响掉落、经验、社交等的"非战斗属性"。本项目作为单人 idle ARPG，这些维度是否需要、以何种形式存在，待设计。
+
+| 项目 | 备注 |
+|---|---|
+| 掉落品质 / Magic Find | |
+| 经验获取加成 | |
+| 拾取范围 | |
+| 金币获取加成 | |
+
+## 9. D2 词缀覆盖对照表
+
+> 列出暗黑破坏神 2 中所有词缀类别，检验当前 L0/L1 属性体系能否支撑。
+> ✅ = 当前 L1 已有轴可直接挂载；❌ = 当前体系缺乏对应轴或机制。
+
+### 9.1 输出类词缀
+
+| D2 词缀 | 对应 L1 轴 | 支撑 |
+|---|---|---|
+| +X to Minimum Damage | `physical_damage` | ✅ |
+| +X to Maximum Damage | `physical_damage` | ✅ |
+| +X% Enhanced Damage | `physical_damage`（+%） | ✅ |
+| +X to Attack Rating | `accuracy` | ✅ |
+| +X% to Attack Rating | `accuracy`（+%） | ✅ |
+| +X% Increased Attack Speed | `attack_speed` | ✅ |
+| +X% Faster Cast Rate | `cast_speed` | ✅ |
+| +X Fire Damage | `fire_damage` | ✅ |
+| +X Cold Damage | `cold_damage` | ✅ |
+| +X Lightning Damage | `lightning_damage` | ✅ |
+| +X Poison Damage over N seconds | `poison_damage` | ✅（但缺 duration 维度） |
+| +X% Fire/Cold/Lightning/Poison Skill Damage | 对应元素 `_damage`（+%） | ✅ |
+| +X% Deadly Strike（双倍物伤概率） | `physical_crit_chance` + `physical_crit_mult` | ✅ |
+| +X% Critical Strike（同 Deadly Strike） | `physical_crit_chance` | ✅ |
+| +X% Life Stolen per Hit | `life_steal` | ✅ |
+| +X% Mana Stolen per Hit | `mana_steal` | ✅ |
+| +X to All Skills / Skill Tree / 单技能 | 熟练度系统 | ✅ |
+| Ignore Target's Defense | 无"无视闪避"轴 | ❌ |
+| -X% to Enemy Fire Resist | 无 `fire_penetration` 轴 | ❌ |
+| -X% to Enemy Cold Resist | 无 `cold_penetration` 轴 | ❌ |
+| -X% to Enemy Lightning Resist | 无 `lightning_penetration` 轴 | ❌ |
+| -X% to Enemy Poison Resist | 无 `poison_penetration` 轴 | ❌ |
+| +X% Crushing Blow（%当前生命伤害） | 无百分比生命伤害机制 | ❌ |
+| +X% Open Wounds（流血 DOT + 禁疗） | 无流血伤害类型、无治疗抑制轴 | ❌ |
+| Prevent Monster Heal | 无治疗抑制轴 | ❌ |
+| Hit Blinds Target | 无致盲/降低命中轴 | ❌ |
+| Hit Causes Monster to Flee | 无恐惧控制类型 | ❌ |
+| Knockback | 无击退轴 | ❌ |
+| Chance to Cast [Skill] on Striking | 无 proc 触发机制 | ❌ |
+
+### 9.2 防御类词缀
+
+| D2 词缀 | 对应 L1 轴 | 支撑 |
+|---|---|---|
+| +X to Life | `max_health` | ✅ |
+| +X% to Maximum Life | `max_health`（+%） | ✅ |
+| +X to Mana | `max_mana` | ✅ |
+| +X% to Maximum Mana | `max_mana`（+%） | ✅ |
+| +X Defense / +%ED (armor) | `physical_resist` 或 `dodge_chance` | ✅（D2 的 Defense 对应你的闪避判定） |
+| +X% Fire Resist | `fire_resist` | ✅ |
+| +X% Cold Resist | `cold_resist` | ✅ |
+| +X% Lightning Resist | `lightning_resist` | ✅ |
+| +X% Poison Resist | `poison_resist` | ✅ |
+| +X Fire/Cold/Lightning Absorb | `element_absorb` | ✅ |
+| +X% Fire/Cold/Lightning Absorb | `element_absorb`（+%） | ✅ |
+| Damage Reduced by X | `physical_resist`（flat） | ✅ |
+| Damage Reduced by X% | `physical_resist`（+%） | ✅ |
+| Magic Damage Reduced by X | `arcane_resist`（但 D2 的 MDR 覆盖全部非物理） | ✅（需确认是否需"通用法伤减免"轴） |
+| +X% Chance to Block | `block_chance` | ✅ |
+| +X% Faster Block Rate | `block_recovery` | ✅ |
+| +X% Faster Hit Recovery | `hit_recovery` | ✅ |
+| Attacker Takes Damage / Thorns | `thorns` | ✅ |
+| +X to Strength | L0 力量 | ✅ |
+| +X to Dexterity | L0 专注 | ✅ |
+| +X to Vitality | L0 生命 | ✅ |
+| +X to Energy | L0 法力 | ✅ |
+| Cannot Be Frozen | 无冰冻免疫轴 | ❌ |
+| Half Freeze Duration | 无冰冻时长减免轴 | ❌ |
+| Chance to Cast [Skill] on Struck | 无 proc 触发机制 | ❌ |
+
+### 9.3 续航类词缀
+
+| D2 词缀 | 对应 L1 轴 | 支撑 |
+|---|---|---|
+| Replenish Life +X | `health_regen` | ✅ |
+| Regenerate Mana +X% | `mana_regen` | ✅ |
+| +X Maximum Stamina | L0 体力 / `max_stamina` | ✅ |
+| +X% Stamina Recovery | 无 `stamina_regen` 轴 | ❌ |
+| +X% Faster Run/Walk | `move_speed` | ✅ |
+
+### 9.4 效用/经济类词缀
+
+| D2 词缀 | 对应 L1 轴 | 支撑 |
+|---|---|---|
+| +X% Better Chance of Getting Magic Items | §8 待设计 | ❌ |
+| +X% Extra Gold from Monsters | §8 待设计 | ❌ |
+| +X to Light Radius | 无视野/感知轴 | ❌ |
+| +X to Experience Gained | §8 待设计 | ❌ |
+| Reduced Requirements -X% | 装备需求减免（meta 属性） | ❌ |
+| Indestructible | 无耐久度系统 | ❌ |
+| Socketed | 装备结构特性 | ❌ |
+| Ethereal | 无耐久度系统 | ❌ |
+
+### 9.5 光环/被动类词缀
+
+| D2 词缀 | 对应 L1 轴 | 支撑 |
+|---|---|---|
+| Aura When Equipped（装备自带光环） | 无光环框架 | ❌ |
+
+### 9.6 覆盖统计
+
+- **总词缀类别**：约 55 条
+- **✅ 可支撑**：约 37 条（67%）
+- **❌ 缺口**：约 18 条（33%）
+
+缺口归类：
+
+| 缺口类型 | 涉及词缀 | 需要什么 |
+|---|---|---|
+| 抗性穿透 | -% Enemy Resist × 4 | 每元素一条 penetration L1 轴，或统一穿透轴 |
+| 控制效果子类型 | Cannot Be Frozen、Blind、Flee、Knockback | 控制效果分类体系 + 分类抗性或 flag |
+| 特殊伤害机制 | Crushing Blow、Open Wounds | §7 战斗特效，需独立机制 |
+| 治疗抑制 | Prevent Monster Heal、Open Wounds | `heal_suppress` 轴或 debuff flag |
+| 触发机制 | Chance to Cast on Strike/Struck | proc 系统（独立机制层，非属性问题） |
+| 体力回复 | Stamina Recovery | `stamina_regen` L1 轴 |
+| 非战斗效用 | MF/GF/XP/Light Radius | §8 待设计 |
+| 装备 meta | Indestructible/Ethereal/Socket/Req Reduce | 取决于是否要耐久度/镶嵌系统 |
+
+## 10. 待回答的元问题
 
 1. **属性给谁用？** 配 AI/build 决策 / 离线收益叙事 / 4 路部队横向比较——影响展示和派生选择。
 2. **属性点来源？** 每级固定点数？任务奖励？最大上限？洗点机制？
