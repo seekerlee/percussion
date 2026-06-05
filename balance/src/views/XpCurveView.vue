@@ -182,7 +182,7 @@ function fmt(n: number): string {
         <h3 class="text-sm font-semibold text-accent">⏱️ 节奏假设</h3>
         <div>
           <label class="block text-sm text-muted mb-1">XP/分钟 (刷怪效率): {{ xpPerMinute }}</label>
-          <input type="range" v-model.number="xpPerMinute" min="10" max="200" step="5" class="w-full" />
+          <input type="range" v-model.number="xpPerMinute" min="10" max="20000" step="5" class="w-full" />
         </div>
 
         <hr class="border-gray-200" />
