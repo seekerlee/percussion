@@ -6,26 +6,9 @@ export const router = createRouter({
   routes: [
     {
       path: '/',
-      name: '首页',
-      component: () => import('../views/HomeView.vue'),
-    },
-    {
-      path: '/anchor',
-      name: 'Level 1 Anchor',
+      name: 'XP & Pacing',
       meta: { nav: true },
-      component: () => import('../views/AnchorView.vue'),
-    },
-    {
-      path: '/xp-curve',
-      name: 'XP Curve',
-      meta: { nav: true },
-      component: () => import('../views/XpCurveView.vue'),
-    },
-    {
-      path: '/power-curve',
-      name: 'Power Curve',
-      meta: { nav: true },
-      component: () => import('../views/PowerCurveView.vue'),
+      component: () => import('../views/PacingView.vue'),
     },
   ],
 })
