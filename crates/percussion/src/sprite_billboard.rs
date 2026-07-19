@@ -35,15 +35,15 @@
 //! 边缘 lean ≈ 5°，肉眼难察觉；且和 body lean 方向一致，反而强化
 //! "sprite 是一个 3D 物体"的认知。
 //!
-//! # 父的 world rotation / position 怎么拿
+//! # 父的 world rotation 怎么拿
 //!
-//! Bevy 的 [`Transform`] 是**局部坐标**。Y 轴 billboard 要拿父在世界里
-//! 的位置（算从 sprite 指向 camera 的水平方向 → yaw）和父的世界旋转
-//! （反算 sprite 该写多少 local rotation 才能合成目标 world rotation）。
+//! Bevy 的 [`Transform`] 是**局部坐标**。Y 轴 billboard 要先用 sprite
+//! 自己的世界位置算出目标 yaw（从 sprite 指向 camera 的水平方向），再
+//! 用父的世界旋转反算 sprite 该写多少 local rotation，才能合成目标
+//! world rotation。
 //!
 //! 本 system **直接通过 [`ChildOf`] 查父 entity 的 [`GlobalTransform`]**，
-//! 一次查询同时读出干净的 `parent.world_rotation` 和
-//! `parent.world_translation`。代价是每个 sprite 多一次 entity 查询，
+//! 读出干净的 `parent.world_rotation`。代价是每个 sprite 多一次 entity 查询，
 //! 量级可忽略。
 //!
 //! 不假设父 rotation 永远 identity —— 容易踩的坑：挂 sprite 的 unit 一般
@@ -114,7 +114,7 @@ impl Plugin for BillboardPlugin {
 /// # 算法
 ///
 /// 目标 **world rotation** = `Quat::from_rotation_y(yaw)`，其中 yaw 是
-/// 在 XZ 平面上、从 sprite（用父的世界 XZ）指向相机的水平方向：
+/// 在 XZ 平面上、从 sprite 自己的世界位置指向相机的水平方向：
 ///
 /// - sprite 局部 +Z → 相机方向（投影到 XZ 平面后）→ sprite 贴图正面对相机
 /// - sprite 局部 +Y → world +Y → sprite 永远世界垂直（跟 body collider 同坐标系）
@@ -124,7 +124,7 @@ impl Plugin for BillboardPlugin {
 /// 反算 local rotation：
 ///
 /// ```text
-/// yaw                   = atan2(camera.x - parent.x, camera.z - parent.z)
+/// yaw                   = atan2(camera.x - sprite.x, camera.z - sprite.z)
 /// sprite.local_rotation = parent.world_rotation⁻¹ × Quat::from_rotation_y(yaw)
 /// ```
 ///
@@ -132,24 +132,23 @@ impl Plugin for BillboardPlugin {
 /// 角度。相机正在 sprite 正上方时 dx ≈ dz ≈ 0，`f32::atan2` 在 (0, 0)
 /// 返回 0，sprite 退化为朝 world +Z，不需要特判。
 ///
-/// 通过 [`ChildOf`] 查父 entity 的 [`GlobalTransform`]，一次拿到
-/// `parent.world_rotation` 和 `parent.world_translation`。详见模块顶部
-/// "父的 world rotation / position 怎么拿"。
+/// 通过 [`ChildOf`] 查父 entity 的 [`GlobalTransform`] 拿到
+/// `parent.world_rotation`。详见模块顶部
+/// "父的 world rotation 怎么拿"。
 ///
 /// # 假设
 ///
 /// - **单相机**：场景里没有 [`Camera3d`] 或有多个则整帧静默跳过；多相机
 ///   分屏那天再扩展。
 /// - **Rectangle mesh 正面是 +Z**：sprite 的正面贴图朝向局部 +Z 轴。
-/// - **billboard 有父**：无父时退化到 identity 父旋转 / 原点位置。本
-///   项目所有 sprite 都是 unit 的子，命中此分支等同误用。
-/// - **sprite 跟父 XZ 重合**：项目里 sprite 的 LocalTransform 只在 Y 上
-///   有 offset（脚部锚点抬高），XZ 都是 0；所以用父的 XZ 算 yaw = 用
-///   sprite 自己 XZ 算 yaw。如果以后需要 sprite 在 XZ 上偏离父（武器
-///   挂点等），这里要换成 sprite 自己的 GlobalTransform。
+/// - **billboard 有父**：无父时退化到 identity 父旋转。本项目正常路径下
+///   sprite 都挂在某个父实体下（unit 或 stage），命中无父分支等同误用。
+/// - **sprite world position 可直接读取**：yaw 一律以 sprite 自己的世界
+///   位置为准；这样无论 sprite 是跟父 XZ 重合（player / dragon1），还是
+///   自己就带 XZ 位移（forest prop），都会正确朝向相机。
 fn face_camera(
     cameras: Query<&GlobalTransform, (With<Camera3d>, Without<BillboardSprite>)>,
-    mut sprites: Query<(&mut Transform, Option<&ChildOf>), With<BillboardSprite>>,
+    mut sprites: Query<(&GlobalTransform, &mut Transform, Option<&ChildOf>), With<BillboardSprite>>,
     parents: Query<&GlobalTransform, Without<BillboardSprite>>,
 ) {
     let Ok(camera_xform) = cameras.single() else {
@@ -157,21 +156,21 @@ fn face_camera(
     };
     let camera_pos = camera_xform.translation();
 
-    for (mut transform, child_of) in &mut sprites {
-        // 一次查询拿父的 world rotation + world translation。
-        // 父没 scale 翻转，rotation() / translation() 都干净。
-        // 没父时退化到 identity / 原点（误用兜底，本项目正常路径不命中）。
-        let (parent_world_rot, parent_world_pos) = child_of
+    for (sprite_global, mut transform, child_of) in &mut sprites {
+        // 一次查询拿父的 world rotation。
+        // 父没 scale 翻转，rotation() 是干净的。
+        // 没父时退化到 identity（误用兜底，本项目正常路径不命中）。
+        let parent_world_rot = child_of
             .and_then(|c| parents.get(c.parent()).ok())
-            .map(|gt| (gt.rotation(), gt.translation()))
-            .unwrap_or((Quat::IDENTITY, Vec3::ZERO));
+            .map(|gt| gt.rotation())
+            .unwrap_or(Quat::IDENTITY);
 
-        // XZ 平面上算从 sprite 指向相机的方向，反推 yaw。
-        // sprite 的 +Z 应指向相机：atan2(x, z) 给的就是绕 Y 从 +Z 转到
-        // 该方向的角度。dx = dz = 0（相机正在 sprite 正上方）时 atan2
-        // 返回 0，无需特判。
-        let dx = camera_pos.x - parent_world_pos.x;
-        let dz = camera_pos.z - parent_world_pos.z;
+        // XZ 平面上算从 sprite 自己指向相机的方向，反推 yaw。
+        // player / dragon1 这类 sprite 子实体和父 XZ 重合时，结果跟读父相同；
+        // tree 这类自己带平移的 sprite 也会得到正确 yaw。
+        let sprite_pos = sprite_global.translation();
+        let dx = camera_pos.x - sprite_pos.x;
+        let dz = camera_pos.z - sprite_pos.z;
         let yaw = dx.atan2(dz);
         let desired_world_rot = Quat::from_rotation_y(yaw);
 
